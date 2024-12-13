@@ -17,7 +17,7 @@ publish = false
 orion = { version = "^0.17.5", features = ["default"] }
 base64 = "0.21.2"
 #crossterm = "^0.26.0"
-rpassword = "^6.0"
+rpassword = "^7.3"
 #inotify = "0.10.2"
 tokio = "1.33.0"
 clap = { version = "4.4.6", features = ["derive"] }
