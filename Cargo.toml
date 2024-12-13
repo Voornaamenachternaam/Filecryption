@@ -1,11 +1,11 @@
 [package]
 name = "filecryption"
-version = "0.1.0"
+version = "0.9.0"
 edition = "2021"
-authors = ["DorianCoding <108593662+DorianCoding@users.noreply.github.com>"]
+authors = ["Voornaamenachternaam>"]
 rust-version = "1.73"
 description = "Allows encryption and decryption of files using Argon2 and XChaCha20Poly1305"
-repository = "https://github.com/DorianCoding/filecryption"
+repository = "https://github.com/Voornaamenachternaam/filecryption"
 license-file = "LICENSE.txt"
 keywords = ["encryption", "decryption", "XChaCha20Poly1305"]
 categories = ["cryptography"]
