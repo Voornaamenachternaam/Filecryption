@@ -9,6 +9,7 @@ Allows encryption and decryption of files using Argon2i and XChaCha20Poly1305 in
 * The script works only from the command line.
 * Enjoy :+1:
 ```
+
 Allows encryption and decryption of files using Argon2 and XChaCha20Poly1305
 
 Usage: filecryption [OPTIONS] <ACTION> [FILE]...
