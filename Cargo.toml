@@ -2,8 +2,8 @@
 name = "filecryption"
 version = "0.9.0"
 edition = "2021"
-authors = ["Voornaamenachternaam>"]
-rust-version = "1.73"
+authors = ["Voornaamenachternaam"]
+rust-version = "1.83"
 description = "Allows encryption and decryption of files using Argon2 and XChaCha20Poly1305"
 repository = "https://github.com/Voornaamenachternaam/filecryption"
 license-file = "LICENSE.txt"
@@ -14,13 +14,13 @@ publish = false
 
 [dependencies]
 # rust-crypto = "^0.2"
-orion = { version = "^0.17.5", features = ["default"] }
+orion = { version = "^0.17.7", features = ["default"] }
 base64 = "0.22.1"
 #crossterm = "^0.26.0"
 rpassword = "^7.3"
 #inotify = "0.10.2"
 tokio = "1.42.0"
 clap = { version = "4.5.23", features = ["derive"] }
-zeroize = { version = "1.7.0", features = ["zeroize_derive"] }
+zeroize = { version = "1.8.1", features = ["zeroize_derive"] }
 #opaque-ke = "2.0"
 #rand = "^0.8.5"
