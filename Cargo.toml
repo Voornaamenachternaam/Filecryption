@@ -1,7 +1,7 @@
 [package]
 name = "filecryption"
 version = "0.9.0"
-edition = "2021"
+edition = "2024"
 authors = ["Voornaamenachternaam"]
 rust-version = "1.85"
 description = "Allows encryption and decryption of files using Argon2 and XChaCha20Poly1305"
