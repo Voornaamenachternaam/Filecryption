@@ -12,3 +12,8 @@ jobs:
       - name: Bump version
         uses: tj-actions/cargo-bump@v3.0.2
       # Commit and Push changes to the Cargo.toml
+
+name: Manual trigger
+
+on:
+  workflow_dispatch:
