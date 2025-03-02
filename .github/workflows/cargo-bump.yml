@@ -1,15 +1,26 @@
-name: cargobump123
+name: Cargo Bump Version
 on:
   workflow_dispatch: {}
-  push:
-    tags:
-      - v*
 
 jobs:
   bump-version:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Bump version
-        if: always()  # Ensure it runs even if manually triggered
-        uses: tj-actions/cargo-bump@v3.0.2
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.PAT }}  # Use a Personal Access Token to push changes
+
+      - name: Install Cargo Bump
+        run: cargo install cargo-bump || true  # Ensure cargo-bump is installed
+
+      - name: Bump Cargo Version
+        run: cargo bump patch  # You can use 'major', 'minor', or 'patch'
+
+      - name: Commit and Push Changes
+        run: |
+          git config --global user.name "github-actions"
+          git config --global user.email "actions@github.com"
+          git add Cargo.toml Cargo.lock
+          git commit -m "Bump Cargo version"
+          git push origin HEAD
