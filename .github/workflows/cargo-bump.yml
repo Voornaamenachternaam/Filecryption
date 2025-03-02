@@ -1,4 +1,4 @@
-name: cargobump
+name: cargobump123
 on:
   push:
     tags:
@@ -10,5 +10,5 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Bump version
-        uses: tj-actions/cargo-bump@v3
+        uses: tj-actions/cargo-bump@v3.0.2
       # Commit and Push changes to the Cargo.toml
