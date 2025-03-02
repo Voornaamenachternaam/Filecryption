@@ -1,6 +1,6 @@
 name: cargobump123
 on:
-  workflow_dispatch:
+  workflow_dispatch: {}
   push:
     tags:
       - v*
@@ -11,5 +11,5 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Bump version
+        if: always()  # Ensure it runs even if manually triggered
         uses: tj-actions/cargo-bump@v3.0.2
-      # Commit and Push changes to the Cargo.toml
