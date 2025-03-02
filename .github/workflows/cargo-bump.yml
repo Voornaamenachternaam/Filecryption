@@ -7,7 +7,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@main
         with:
           token: ${{ secrets.PAT }}  # Use a Personal Access Token to push changes
 
