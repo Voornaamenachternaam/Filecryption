@@ -1,6 +1,8 @@
 name: Cargo Bump Version
-on:
-  workflow_dispatch: {}
+on: 
+  workflow_dispatch: {}  # Allows manual trigger from GitHub Actions UI
+  schedule:
+    - cron: "0 2 * * *"  # Runs daily at 2 AM UTC
 
 jobs:
   bump-version:
