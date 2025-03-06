@@ -18,28 +18,39 @@ jobs:
     runs-on: ubuntu-latest
     name: Test cargo-bump
     steps:
-      - name: Checkout
-        uses: actions/checkout@main
+      - name: Checkout repository
+        uses: actions/checkout@v4  # Use the latest stable version
         with:
           fetch-depth: 0
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable  # Ensures Rust is available
+
+      - name: Install cargo-bump
+        run: cargo install cargo-bump  # Installs cargo-bump in the runner
+
       - name: Run cargo-bump
         id: cargo-bump
-        uses: ./
-        with:
-          working-directory: test-package
+        run: |
+          cd test-package
+          cargo bump patch
+          echo "new_version=$(cargo metadata --format-version 1 | jq -r '.packages[0].version')" >> $GITHUB_ENV
+        shell: bash
+
       - name: Verify Changed files
         id: verify-changed-files
-        uses: tj-actions/verify-changed-files@main
+        uses: tj-actions/verify-changed-files@v18
         with:
           files: |
             test-package/**
+
       - name: Create Pull Request
-        uses: peter-evans/create-pull-request@main
+        uses: peter-evans/create-pull-request@v6
         if: steps.verify-changed-files.outputs.files_changed == 'true'
         with:
           base: "main"
           labels: "merge when passing"
           title: "chore: upgraded test-package"
-          branch: "chore/upgraded-to-${{ steps.cargo-bump.outputs.new_version }}"
-          body: "View [CHANGES](https://github.com/${{ github.repository }}/compare/${{ steps.cargo-bump.outputs.old_version }}...${{ steps.cargo-bump.outputs.new_version }})"
+          branch: "chore/upgraded-to-${{ env.new_version }}"
+          body: "View [CHANGES](https://github.com/${{ github.repository }}/compare/${{ env.new_version }})"
           token: ${{ secrets.PAT_TOKEN }}
