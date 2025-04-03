@@ -1,6 +1,6 @@
 [package]
 name = "filecryption"
-version = "0.9.29"
+version = "0.9.30"
 edition = "2024"
 authors = ["Voornaamenachternaam"]
 rust-version = "1.85.1"
