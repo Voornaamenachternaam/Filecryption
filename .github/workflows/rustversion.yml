@@ -1,0 +1,49 @@
+name: Update Cargo.toml
+
+on:
+  schedule:
+    - cron: '0 0 * * *' # Runs weekly on Sunday at midnight
+  workflow_dispatch: {} # Allow manual triggering of the workflow
+
+jobs:
+  update-cargo-toml:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4.2.2
+
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1.0.6
+        with:
+          toolchain: stable
+          override: true
+
+      - name: Update Cargo.toml
+        run: |
+          # Check for updates and modify Cargo.toml
+          # Replace this with your specific logic for updating edition and rust-version
+          if ! grep -q 'edition = "2024"' Cargo.toml; then
+            sed -i 's/edition = ".*"/edition = "2024"/g' Cargo.toml
+          fi
+          if ! grep -q 'rust-version = "1.86.0"' Cargo.toml; then
+            sed -i 's/rust-version = ".*"/rust-version = "1.86.0"/g' Cargo.toml
+          fi
+          git config --global user.name "github-actions"
+          git config --global user.email "github-actions@github.com"
+          git commit -am "Update Cargo.toml: edition and rust-version"
+
+      - name: Push changes
+        uses: ad-m/github-push-action@v0.8.0
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          branch: update-cargo-toml
+
+      - name: Create pull request
+        uses: peter-evans/create-pull-request@v7.0.8
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: update-cargo-toml
+          title: Update Cargo.toml: edition and rust-version
+          body: |
+            This pull request updates the edition and rust-version fields in the Cargo.toml file.
