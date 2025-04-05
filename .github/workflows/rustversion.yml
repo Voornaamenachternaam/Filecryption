@@ -1,4 +1,4 @@
-name: Update Cargo.toml
+name: Update Rust Version and Edition
 
 on:
   schedule:
@@ -19,27 +19,39 @@ jobs:
           toolchain: stable
           override: true
 
-      - name: Fetch latest Rust version and edition
+      - name: Extract current Rust version and edition from Cargo.toml
+        id: cargo-info
+        run: |
+          # Extract current rust-version and edition from Cargo.toml
+          current_version=$(grep 'rust-version' Cargo.toml | awk -F'"' '{print $2}')
+          current_edition=$(grep 'edition' Cargo.toml | awk -F'"' '{print $2}')
+          echo "current_version=$current_version" >> $GITHUB_ENV
+          echo "current_edition=$current_edition" >> $GITHUB_ENV
+
+      - name: Fetch latest Rust version and determine edition
         id: rust-info
         run: |
-          # Get the latest Rust version
+          # Fetch the latest Rust version
           latest_version=$(rustc --version | awk '{print $2}')
           echo "latest_version=$latest_version" >> $GITHUB_ENV
 
-          # Determine the latest edition (assuming 2024 is the latest for now)
+          # Determine the latest edition (assuming 2024 for now)
           latest_edition="2024"
           echo "latest_edition=$latest_edition" >> $GITHUB_ENV
 
-      - name: Update Cargo.toml
+      - name: Compare and update Cargo.toml
         run: |
-          # Update Cargo.toml dynamically
           changes_made=false
-          if ! grep -q "edition = \"$latest_edition\"" Cargo.toml; then
-            sed -i "s/edition = \".*\"/edition = \"$latest_edition\"/g" Cargo.toml
+
+          # Compare and update rust-version
+          if [ "$(printf '%s\n' "$latest_version" "$current_version" | sort -V | tail -n1)" != "$current_version" ]; then
+            sed -i "s/rust-version = \".*\"/rust-version = \"$latest_version\"/g" Cargo.toml
             changes_made=true
           fi
-          if ! grep -q "rust-version = \"$latest_version\"" Cargo.toml; then
-            sed -i "s/rust-version = \".*\"/rust-version = \"$latest_version\"/g" Cargo.toml
+
+          # Compare and update edition
+          if [ "$latest_edition" != "$current_edition" ]; then
+            sed -i "s/edition = \".*\"/edition = \"$latest_edition\"/g" Cargo.toml
             changes_made=true
           fi
 
@@ -47,11 +59,11 @@ jobs:
           if [ "$changes_made" = true ]; then
             git config --global user.name "github-actions"
             git config --global user.email "github-actions@github.com"
-            git commit -am "Update Cargo.toml: edition and rust-version"
+            git commit -am "Update Cargo.toml: rust-version and/or edition"
             echo "changes_made=true" >> $GITHUB_ENV
           else
             echo "changes_made=false" >> $GITHUB_ENV
-            echo "No changes made to Cargo.toml"
+            echo "No updates needed for Cargo.toml"
           fi
 
       - name: Push changes
@@ -67,6 +79,8 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           branch: update-cargo-toml
-          title: Update Cargo.toml to latest
+          title: Update Cargo.toml latest
           body: |
-            This pull request updates the edition and rust-version fields in the Cargo.toml file.
+            This pull request updates the Cargo.toml file with the latest:
+            - `rust-version` (if a newer stable version is available)
+            - `edition` (if a newer edition is available)
