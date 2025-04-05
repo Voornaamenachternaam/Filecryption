@@ -21,17 +21,25 @@ jobs:
 
       - name: Update Cargo.toml
         run: |
-          # Check for updates and modify Cargo.toml
-          # Replace this with your specific logic for updating edition and rust-version
+          # Update Cargo.toml if necessary
+          changes_made=false
           if ! grep -q 'edition = "2024"' Cargo.toml; then
             sed -i 's/edition = ".*"/edition = "2024"/g' Cargo.toml
+            changes_made=true
           fi
           if ! grep -q 'rust-version = "1.86.0"' Cargo.toml; then
             sed -i 's/rust-version = ".*"/rust-version = "1.86.0"/g' Cargo.toml
+            changes_made=true
           fi
-          git config --global user.name "github-actions"
-          git config --global user.email "github-actions@github.com"
-          git commit -am "Update Cargo.toml: edition and rust-version"
+
+          # Commit changes only if updates were made
+          if [ "$changes_made" = true ]; then
+            git config --global user.name "github-actions"
+            git config --global user.email "github-actions@github.com"
+            git commit -am "Update Cargo.toml: edition and rust-version"
+          else
+            echo "No changes made to Cargo.toml"
+          fi
 
       - name: Push changes
         uses: ad-m/github-push-action@v0.8.0
