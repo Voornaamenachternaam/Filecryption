@@ -16,12 +16,10 @@ jobs:
 
     strategy:
       matrix:
-        # You can add more, for any target you'd like!
         include:
           - build: linux
             os: ubuntu-latest
             target: x86_64-unknown-linux-musl
-          
           - build: windows-gnu
             os: windows-latest
             target: x86_64-pc-windows-gnu
@@ -35,11 +33,8 @@ jobs:
         run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
 
       - name: Install Rust
-        # Or @nightly if you want
         uses: dtolnay/rust-toolchain@stable
-        # Arguments to pass in
         with:
-          # Make Rust compile to our target (defined in the matrix)
           targets: ${{ matrix.target }}
 
       - name: Build
@@ -52,16 +47,15 @@ jobs:
       - name: Build archive
         shell: bash
         run: |
-          # Replace with the name of your binary
           binary_name="$(basename "$GITHUB_REPOSITORY")"
-
-
-          dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
+          sanitized_version="${VERSION//\//-}"
+          dirname="${binary_name}-${sanitized_version}-${{ matrix.target }}"
           mkdir "$dirname"
+
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            mv "target/${{ matrix.target }}/release/$binary_name.exe" "$dirname"
+            mv "target/${{ matrix.target }}/release/${binary_name}.exe" "$dirname"
           else
-            mv "target/${{ matrix.target }}/release/$binary_name" "$dirname"
+            mv "target/${{ matrix.target }}/release/${binary_name}" "$dirname"
           fi
 
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
