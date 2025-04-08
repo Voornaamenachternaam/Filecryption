@@ -113,33 +113,8 @@ jobs:
       new_tag_version: ${{ inputs.version || steps.new_version.outputs.tag_version || steps.none_version.outputs.tag_version }}
       new_crate_version: ${{ steps.full_version.outputs.crate_version || steps.new_version.outputs.crate_version || steps.none_version.outputs.crate_version }}
 
-  check-crate-type:
-    uses: ./.github/workflows/crate_type.yaml
-
-  run-ci:
-    needs: validate-input
-    uses: ./.github/workflows/ci.yaml
-
-  cargo-semver-checks:
-    needs: [get-version, run-ci]
-    uses: ./.github/workflows/cargo_semver_checks.yaml
-    with:
-      bump-version: ${{ needs.get-version.outputs.new_crate_version }}
-
-  bump-version:
-    needs: [get-version, cargo-semver-checks]
-    uses: ./.github/workflows/bump_version.yaml
-    with:
-      crate-version: ${{  needs.get-version.outputs.new_crate_version }}
-
-  update-attributions:
-    needs: [get-version, bump-version]
-    uses: ./.github/workflows/cargo_attribution.yaml
-    with:
-      commit_message: ${{ needs.get-version.outputs.new_crate_version }}
-
   create-tag:
-    needs: [get-version, update-attributions]
+    needs: get-version, update-attributions
     runs-on: ubuntu-latest
     steps:
       - name: Fetch Repository
@@ -227,9 +202,3 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           ref: refs/tags/${{  needs.get-version.outputs.new_tag_version }}
           checksum: sha256
-
-  publish-crate:
-    needs: [create-tag]
-    if: ${{ inputs.publish }}
-    uses: ./.github/workflows/publish.yaml
-    secrets: inherit
