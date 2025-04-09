@@ -1,4 +1,4 @@
-name: CD # Continuous Deployment
+name: Continuous Deployment
 
 permissions:
   contents: write
@@ -22,7 +22,7 @@ defaults:
 
 jobs:
   upload-assets:
-    name: Build and Upload (${{ matrix.target }})
+    name: Upload Rust Binaries
     if: github.repository_owner == 'MyOwner' && startsWith(github.event.release.name, 'my-bin-v')
     runs-on: ${{ matrix.os }}
     strategy:
@@ -35,10 +35,10 @@ jobs:
             os: windows-2022
             use_cross: false
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-2latest
+            os: ubuntu-22.04
             use_cross: false
           - target: x86_64-unknown-linux-musl
-            os: ubuntu-latest
+            os: ubuntu-22.04
             use_cross: true
           - target: x86_64-pc-windows-msvc
             os: windows-2022
@@ -47,6 +47,10 @@ jobs:
     timeout-minutes: 60
 
     steps:
+      - name: Log build target
+        run: |
+           echo "Building for target: ${{ matrix.target }}"
+
       - name: Checkout repository
         uses: actions/checkout@v4.2.2
 
@@ -66,7 +70,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-${{ matrix.target }}-
 
-      - name: Install `cross` for cross-compilation
+      - name: Install cross for cross-compilation
         if: matrix.use_cross == true
         uses: taiki-e/install-action@v2.49.46
         with:
@@ -76,21 +80,20 @@ jobs:
         if: endsWith(matrix.target, 'windows-msvc')
         run: echo "RUSTFLAGS=${RUSTFLAGS} -C target-feature=+crt-static" >> "${GITHUB_ENV}"
 
-      - name: Build binary (cross)
-        if: matrix.use_cross == true
-        run: cross build --release --target ${{ matrix.target }}
-
-      - name: Build binary (cargo)
-        if: matrix.use_cross == false
-        run: cargo build --release --target ${{ matrix.target }}
+      - name: Build binary
+        run: |
+          if [ "${{ matrix.use_cross }}" == "true" ]; then
+            cross build --release --target ${{ matrix.target }}
+          else
+            cargo build --release --target ${{ matrix.target }}
+          fi
 
       - name: Strip binary (Linux/macOS)
-        if: startsWith(matrix.os, 'ubuntu') || startsWith(matrix.os, 'macos')
-        run: |
-          strip "target/${{ matrix.target }}/release/my-bin" || echo "Skipping strip (not supported)"
+        if: runner.os != 'Windows'
+        run: strip "target/${{ matrix.target }}/release/my-bin" || echo "Skipping strip (not supported)"
 
       - name: Strip binary (Windows)
-        if: startsWith(matrix.os, 'windows')
+        if: runner.os == 'Windows'
         run: |
           llvm-strip.exe "target/${{ matrix.target }}/release/my-bin.exe" || echo "Skipping strip (not supported)"
 
