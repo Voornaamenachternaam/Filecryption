@@ -99,7 +99,7 @@ jobs:
       - name: Upload Rust binary to release
         uses: taiki-e/upload-rust-binary-action@v1.24.0
         with:
-          bin: my-bin
+          bin: filecryption
           target: ${{ matrix.target }}
           tar: all
           zip: windows
