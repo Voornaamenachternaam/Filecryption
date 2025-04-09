@@ -89,12 +89,12 @@ jobs:
 
       - name: Strip binary (Linux/macOS)
         if: runner.os != 'Windows'
-        run: strip "target/${{ matrix.target }}/release/my-bin" || echo "Skipping strip (not supported)"
+        run: strip "target/${{ matrix.target }}/release/filecryption" || echo "Skipping strip (not supported)"
 
       - name: Strip binary (Windows)
         if: runner.os == 'Windows'
         run: |
-          llvm-strip.exe "target/${{ matrix.target }}/release/my-bin.exe" || echo "Skipping strip (not supported)"
+          llvm-strip.exe "target/${{ matrix.target }}/release/filecryption.exe" || echo "Skipping strip (not supported)"
 
       - name: Upload Rust binary to release
         uses: taiki-e/upload-rust-binary-action@v1.24.0
