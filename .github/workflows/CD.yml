@@ -23,7 +23,6 @@ defaults:
 jobs:
   upload-assets:
     name: Upload Rust Binaries
-    if: github.repository_owner == 'MyOwner' && startsWith(github.event.release.name, 'my-bin-v')
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
