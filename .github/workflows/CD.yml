@@ -22,7 +22,7 @@ defaults:
 
 jobs:
   upload-assets:
-    name: ${{ matrix.target }}
+    name: Build and Upload (${{ matrix.target }})
     if: github.repository_owner == 'MyOwner' && startsWith(github.event.release.name, 'my-bin-v')
     runs-on: ${{ matrix.os }}
     strategy:
@@ -30,25 +30,72 @@ jobs:
         include:
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
+            use_cross: true
+          - target: aarch64-pc-windows-msvc
+            os: windows-2022
+            use_cross: false
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-2latest
+            use_cross: false
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            use_cross: true
           - target: x86_64-pc-windows-msvc
             os: windows-2022
+            use_cross: false
+
     timeout-minutes: 60
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4.2.2
-      - name: Install Rust toolchain
+
+      - name: Set up Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-      - uses: taiki-e/setup-cross-toolchain-action@v1.28.3
         with:
-          target: ${{ matrix.target }}
-        if: startsWith(matrix.os, 'ubuntu') && !contains(matrix.target, '-musl')
-      - uses: taiki-e/install-action@v2.49.46
+          targets: ${{ matrix.target }}
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4.2.3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ matrix.target }}-
+
+      - name: Install `cross` for cross-compilation
+        if: matrix.use_cross == true
+        uses: taiki-e/install-action@v2.49.46
         with:
           tool: cross
-        if: contains(matrix.target, '-musl')
-      - run: echo "RUSTFLAGS=${RUSTFLAGS} -C target-feature=+crt-static" >> "${GITHUB_ENV}"
+
+      - name: Enable static linking for Windows targets
         if: endsWith(matrix.target, 'windows-msvc')
-      - uses: taiki-e/upload-rust-binary-action@v1.24.0
+        run: echo "RUSTFLAGS=${RUSTFLAGS} -C target-feature=+crt-static" >> "${GITHUB_ENV}"
+
+      - name: Build binary (cross)
+        if: matrix.use_cross == true
+        run: cross build --release --target ${{ matrix.target }}
+
+      - name: Build binary (cargo)
+        if: matrix.use_cross == false
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Strip binary (Linux/macOS)
+        if: startsWith(matrix.os, 'ubuntu') || startsWith(matrix.os, 'macos')
+        run: |
+          strip "target/${{ matrix.target }}/release/my-bin" || echo "Skipping strip (not supported)"
+
+      - name: Strip binary (Windows)
+        if: startsWith(matrix.os, 'windows')
+        run: |
+          llvm-strip.exe "target/${{ matrix.target }}/release/my-bin.exe" || echo "Skipping strip (not supported)"
+
+      - name: Upload Rust binary to release
+        uses: taiki-e/upload-rust-binary-action@v1.24.0
         with:
           bin: my-bin
           target: ${{ matrix.target }}
