@@ -71,7 +71,7 @@ jobs:
 
       - name: Install cross for cross-compilation
         if: matrix.use_cross == true
-        uses: taiki-e/install-action@v2.49.50
+        uses: taiki-e/install-action@v2.50.0
         with:
           tool: cross
 
