@@ -20,7 +20,7 @@ base64 = "0.22.1"
 rpassword = "^7.4.0"
 #inotify = "0.10.2"
 tokio = "1.45.1"
-clap = { version = "4.5.38", features = ["derive"] }
+clap = { version = "4.5.39", features = ["derive"] }
 zeroize = { version = "1.8.1", features = ["zeroize_derive"] }
 #opaque-ke = "2.0"
 #rand = "^0.8.5"
