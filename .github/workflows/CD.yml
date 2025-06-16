@@ -97,7 +97,7 @@ jobs:
           llvm-strip.exe "target/${{ matrix.target }}/release/filecryption.exe" || echo "Skipping strip (not supported)"
 
       - name: Upload Rust binary to release
-        uses: taiki-e/upload-rust-binary-action@v1.26.0
+        uses: taiki-e/upload-rust-binary-action@v1.27.0
         with:
           bin: filecryption
           target: ${{ matrix.target }}
