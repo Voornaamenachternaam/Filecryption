@@ -1,0 +1,143 @@
+name: Dependency Update
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * *" # weekly Monday 03:00 UTC
+
+permissions:
+  issues: write
+  pull-requests: write
+  contents: write
+
+env:
+  BRANCH_PREFIX: ci/deps-update
+  OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
+jobs:
+  deps-update:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install Rust stable
+        run: |
+          rustup install stable
+          rustup default stable
+          rustc -V
+          cargo -V
+
+      - name: Install cargo-edit
+        run: cargo install cargo-edit --locked
+
+      - name: Update dependencies across all crates (workspace or independent crates)
+        run: |
+          shopt -s globstar nullglob
+          found=0
+          for manifest in **/Cargo.toml; do
+            # skip manifests in target dirs
+            case "$manifest" in
+              */target/*) continue ;;
+            esac
+            found=1
+            dir=$(dirname "$manifest")
+            echo ">> Upgrading dependencies in $dir"
+            (cd "$dir" && cargo upgrade) || echo "⚠️ cargo upgrade failed in $dir (continuing)"
+          done
+
+          if [ $found -eq 0 ]; then
+            echo "No Cargo.toml files found in repo; nothing to do."
+            exit 0
+          fi
+
+      - name: Create branch & PR when deps changed OR create diagnostic PR if builds fail
+        id: create_pr
+        run: |
+          git config --global user.name "github-actions"
+          git config --global user.email "github-actions@github.com"
+
+          # capture whether there are changes
+          if git diff --quiet; then
+            echo "changes=false" >> $GITHUB_ENV
+          else
+            echo "changes=true" >> $GITHUB_ENV
+          fi
+
+          # If no changes and we still want a PR on diagnostics, we won't create now.
+          # We'll create PR only when there are changes; build failures create a separate PR below.
+        shell: bash
+
+      - name: Create PR for dependency updates (if changes)
+        if: env.changes == 'true'
+        id: pr_deps
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "chore(ci): upgrade dependencies"
+          branch: ${{ env.BRANCH_PREFIX }}-${{ github.run_id }}
+          title: "chore: Update Rust dependencies"
+          body: |
+            Automated dependency upgrades across all Cargo.toml files.
+
+      - name: Run builds across crates and gather failures
+        id: build_check
+        run: |
+          shopt -s globstar nullglob
+          rm -f build-failures.txt || true
+          fail_count=0
+          for manifest in **/Cargo.toml; do
+            case "$manifest" in
+              */target/*) continue ;;
+            esac
+            dir=$(dirname "$manifest")
+            echo ">>> Building $dir"
+            if (cd "$dir" && cargo build --all-targets); then
+              echo "OK: $dir"
+            else
+              echo "FAILED: $dir" >> build-failures.txt
+              (cd "$dir" && cargo build --all-targets 2>&1 | sed 's/^/    /') >> build-failures.txt || true
+              fail_count=$((fail_count + 1))
+            fi
+          done
+          echo "failed_count=$fail_count" >> $GITHUB_ENV
+          if [ $fail_count -gt 0 ]; then
+            echo "There were build failures; creating diagnostic file."
+            git add build-failures.txt || true
+            git commit -m "chore(ci): add dependency update build-failures.txt" || true
+            echo "diagnostic_committed=true" >> $GITHUB_ENV
+          else
+            echo "diagnostic_committed=false" >> $GITHUB_ENV
+          fi
+
+      - name: Create PR for diagnostics (if build failures but no code changes)
+        if: env.failed_count != '0' && env.changes != 'true'
+        id: pr_diag
+        uses: peter-evans/create-pull-request@v7.0.8
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "chore(ci): diagnostic - dependency update build failures"
+          branch: ${{ env.BRANCH_PREFIX }}-diagnostics-${{ github.run_id }}
+          title: "chore: Dependency update diagnostic"
+          body: |
+            The automated dependency update produced build failures. See `build-failures.txt` in this PR.
+
+      - name: "GenAI: Summarize & Patch (dependencies)"
+        if: ${{ env.OPENAI_API_KEY != '' && (steps.pr_deps.outputs.pull_request_number != '' || steps.pr_diag.outputs.pull_request_number != '') }}
+        uses: dlidstrom/genai-code-review@v3.0.8
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          openai_api_key: ${{ secrets.OPENAI_API_KEY }}
+          # prefer the dependency PR, else fallback to diagnostic PR
+          github_pr_id: ${{ steps.pr_deps.outputs.pull_request_number || steps.pr_diag.outputs.pull_request_number }}
+          mode: patch
+          language: en
+          openai_model: "gpt-3.5-turbo"
+          openai_temperature: 0.2
+          openai_max_tokens: 2048
+          custom_prompt: |
+            The repository had automated dependency upgrades and this PR contains the changes.
+            If there are build failures, provide a minimal patch (unified diff) that will make the code compile under the updated dependencies.
+            Only modify `.rs` files or small helper/build files. Do not add unrelated changes.
+        continue-on-error: true
