@@ -1,0 +1,78 @@
+name: Rust Toolchain Update
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 2 * * *" # weekly Monday 02:00 UTC
+
+permissions:
+  issues: write
+  pull-requests: write
+  contents: write
+  
+env:
+  BRANCH_PREFIX: ci/toolchain-update
+  OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
+jobs:
+  update-toolchain:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install / ensure latest Rust stable
+        run: |
+          rustup install stable
+          rustup default stable
+          rustc -V
+          cargo -V
+
+      - name: Update rust-toolchain files (safe glob)
+        run: |
+          # ensure unmatched globs expand to nothing
+          shopt -s globstar nullglob
+          updated=false
+          for file in **/rust-toolchain **/rust-toolchain.toml; do
+            # skip if pattern expanded to literal (nullglob prevents that)
+            if [ -e "$file" ]; then
+              echo "Updating $file"
+              printf '[toolchain]\nchannel = "stable"\n' > "$file"
+              updated=true
+            fi
+          done
+
+          if [ "$updated" = true ]; then
+            echo "RUST_TOOLCHAIN_UPDATED=true" >> $GITHUB_ENV
+          else
+            echo "RUST_TOOLCHAIN_UPDATED=false" >> $GITHUB_ENV
+          fi
+
+      - name: Commit & create PR if toolchain changed
+        if: env.RUST_TOOLCHAIN_UPDATED == 'true'
+        id: create_pr
+        uses: peter-evans/create-pull-request@v7.0.8
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "chore(ci): update Rust toolchain to latest stable"
+          branch: ${{ env.BRANCH_PREFIX }}-${{ github.run_id }}
+          title: "chore: Update Rust toolchain"
+          body: |
+            Automated update of rust-toolchain files to the latest stable Rust.
+
+      - name: "GenAI: Summarize & optionally patch (toolchain)"
+        if: ${{ env.OPENAI_API_KEY != '' && steps.create_pr.outputs.pull_request_number != '' }}
+        uses: dlidstrom/genai-code-review@v3.0.8
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          openai_api_key: ${{ secrets.OPENAI_API_KEY }}
+          github_pr_id: ${{ steps.create_pr.outputs.pull_request_number }}
+          mode: files
+          language: en
+          openai_model: "gpt-3.5-turbo"
+          openai_temperature: 0.2
+          openai_max_tokens: 1024
+          custom_prompt: |
+            Summarize the changes in this PR (rust-toolchain update) and suggest small compatibility fixes if needed.
+        continue-on-error: true
