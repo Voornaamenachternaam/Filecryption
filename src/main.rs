@@ -164,7 +164,7 @@ fn extractmasterkey(
         "The master key is: '{}'. Please keep it safe.",
         general_purpose::STANDARD.encode(derived_key.unprotected_as_bytes())
     ); */
-    return aead::SecretKey::from_slice(derived_key.unprotected_as_bytes()).unwrap();
+    aead::SecretKey::from_slice(derived_key.unprotected_as_bytes()).unwrap()
 }
 fn recurse_files(path: impl AsRef<Path>) -> std::io::Result<Vec<PathBuf>> {
     let mut buf = vec![];
