@@ -9,10 +9,3 @@ updates:
     directory: "/"
     schedule:
       interval: "daily"
-
-updates:
-  - package-ecosystem: "rust-toolchain"
-    directory: "/"
-    schedule:
-      interval: "daily"
-
