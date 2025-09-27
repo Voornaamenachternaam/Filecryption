@@ -13,6 +13,7 @@ env:
   CARGO_NET_RETRY: 10
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # keep your strict warnings policy; we'll append the x86-64-v3 flag when needed
   RUSTFLAGS: -D warnings
   RUSTUP_MAX_RETRIES: 10
 
@@ -57,6 +58,13 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+
+      # --- NEW: enable x86-64-v3 CPU level for x86_64 targets ---
+      - name: Enable x86-64-v3 CPU level for x86_64 targets
+        if: contains(matrix.target, 'x86_64')
+        run: |
+          # append the x86-64-v3 tuning to RUSTFLAGS while preserving any existing flags
+          echo "RUSTFLAGS=${RUSTFLAGS} -C target-cpu=x86-64-v3" >> "${GITHUB_ENV}"
 
       - name: Cache Rust dependencies
         uses: actions/cache@v4.3.0
@@ -103,4 +111,4 @@ jobs:
           target: ${{ matrix.target }}
           tar: all
           zip: windows
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets .GITHUB_TOKEN }}
