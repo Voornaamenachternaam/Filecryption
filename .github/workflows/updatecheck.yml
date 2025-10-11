@@ -12,6 +12,7 @@ on:
     - cron: '0 2 * * *'
 
 permissions:
+  actions: read
   contents: read
   security-events: write
 
@@ -22,7 +23,6 @@ jobs:
     continue-on-error: true
     env:
       CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS: allow
-
     steps:
       - uses: actions/checkout@v5
 
@@ -31,29 +31,46 @@ jobs:
           rustup update stable
           rustup default stable
 
-      - name: Update dependencies
+      - name: Update Cargo.lock
         run: cargo update --verbose
 
       - name: Build
         run: cargo build --verbose
 
-      - name: Run tests and capture JSON output
-        run: cargo test --message-format=json > test-results.json
+      - name: Test
+        run: cargo test --verbose
 
-      - name: Generate SARIF report
-        run: |
-          jq -n \
-            --slurpfile results test-results.json \
-            '{version:"2.1.0", runs:[{tool:{driver:{name:"cargo test",semanticVersion:"1.0"}}, results:$results}]}' \
-            > report.sarif
+  codeql_scan:
+    name: CodeQL Security Scan
+    needs: latest_deps
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4.30.8
+        with:
+          languages: rust
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v4.30.8
+
+      - name: Run tests (to generate debug info for CodeQL)
+        run: cargo test --verbose
+
+      - name: Analyze with CodeQL
+        uses: github/codeql-action/analyze@v4.30.8
+        with:
+          upload: false
+          output: codeql-results.sarif
 
       - name: Upload SARIF to Code Scanning
         uses: github/codeql-action/upload-sarif@v4.30.8
         with:
-          sarif_file: report.sarif
+          sarif_file: codeql-results.sarif
 
       - name: Upload SARIF artifact
         uses: actions/upload-artifact@v4.6.2
         with:
           name: sarif-report
-          path: report.sarif
+          path: codeql-results.sarif
