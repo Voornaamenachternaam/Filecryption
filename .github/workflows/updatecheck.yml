@@ -42,20 +42,10 @@ jobs:
 
       - name: Generate SARIF report
         run: |
-          jq -s '{
-            version: "2.1.0",
-            runs: [
-              {
-                tool: {
-                  driver: {
-                    name: "cargo test",
-                    semanticVersion: "1.0"
-                  }
-                },
-                results: .
-              }
-            ]
-          }' test-results.json > report.sarif
+          jq -n \
+            --slurpfile results test-results.json \
+            '{version:"2.1.0", runs:[{tool:{driver:{name:"cargo test",semanticVersion:"1.0"}}, results:$results}]}' \
+            > report.sarif
 
       - name: Upload SARIF to Code Scanning
         uses: github/codeql-action/upload-sarif@v4.30.8
