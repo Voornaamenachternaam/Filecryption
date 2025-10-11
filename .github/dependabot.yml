@@ -11,6 +11,6 @@ updates:
       interval: "daily"
       
   - package-ecosystem: "cargo"
-    directory: "**/*"
+    directory: "src/"
     schedule:
       interval: "daily" 
