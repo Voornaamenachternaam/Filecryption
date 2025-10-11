@@ -1,13 +1,20 @@
 name: Updatecheck
 
-on: 
+on:
   push:
-    branches: [ "main" ]
+    branches:
+      - main
   pull_request:
-    branches: [ "main" ]
-  workflow_dispatch: {}  # Allows manual trigger from GitHub Actions UI
+    branches:
+      - main
+  workflow_dispatch: {}
   schedule:
-    - cron: "0 2 * * *"  # Runs daily at 2 AM UTC
+    - cron: '0 2 * * *'
+
+permissions:
+  contents: read
+  security-events: write
+
 jobs:
   latest_deps:
     name: Latest Dependencies
@@ -17,7 +24,34 @@ jobs:
       CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS: allow
     steps:
       - uses: actions/checkout@v5.0.0
-      - run: rustup update stable && rustup default stable
-      - run: cargo update --verbose
-      - run: cargo build --verbose
-      - run: cargo test --verbose
+
+      - name: Install stable Rust
+        run: |
+          rustup update stable
+          rustup default stable
+
+      - name: Update dependencies
+        run: cargo update --verbose
+
+      - name: Build
+        run: cargo build --verbose
+
+      - name: Run tests and capture JSON output
+        run: cargo test -- --format=json > test-results.json
+
+      - name: Generate SARIF report
+        run: |
+          jq -n --argjson results "$(jq . test-results.json)" \
+            '{ version: "2.1.0", runs: [ { tool: { driver: { name: "cargo test", semanticVersion: "1.0" } }, results: $results } ] }' \
+            > report.sarif
+
+      - name: Upload SARIF to Code Scanning
+        uses: github/codeql-action/upload-sarif@v4.30.8
+        with:
+          sarif_file: report.sarif
+
+      - name: Upload SARIF artifact
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: sarif-report
+          path: report.sarif
