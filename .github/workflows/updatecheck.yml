@@ -12,7 +12,6 @@ on:
     - cron: '0 2 * * *'
 
 permissions:
-  actions: read
   contents: read
   security-events: write
 
@@ -48,26 +47,18 @@ jobs:
       - uses: actions/checkout@v5
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v4.30.8
+        uses: github/codeql-action/init@v2
         with:
           languages: rust
 
       - name: Autobuild
-        uses: github/codeql-action/autobuild@v4.30.8
+        uses: github/codeql-action/autobuild@v2
 
-      - name: Run tests (to generate debug info for CodeQL)
-        run: cargo test --verbose
-
-      - name: Analyze with CodeQL
-        uses: github/codeql-action/analyze@v4.30.8
+      - name: Analyze and upload results
+        uses: github/codeql-action/analyze@v2
         with:
-          upload: false
           output: codeql-results.sarif
-
-      - name: Upload SARIF to Code Scanning
-        uses: github/codeql-action/upload-sarif@v4.30.8
-        with:
-          sarif_file: codeql-results.sarif
+          upload: true
 
       - name: Upload SARIF artifact
         uses: actions/upload-artifact@v4.6.2
