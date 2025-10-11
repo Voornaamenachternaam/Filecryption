@@ -42,9 +42,20 @@ jobs:
 
       - name: Generate SARIF report
         run: |
-          jq -n --argjson results "$(jq -s . test-results.json)" \
-            '{ version: "2.1.0", runs: [ { tool: { driver: { name: "cargo test", semanticVersion: "1.0" } }, results: $results } ] }' \
-            > report.sarif
+          jq -s '{
+            version: "2.1.0",
+            runs: [
+              {
+                tool: {
+                  driver: {
+                    name: "cargo test",
+                    semanticVersion: "1.0"
+                  }
+                },
+                results: .
+              }
+            ]
+          }' test-results.json > report.sarif
 
       - name: Upload SARIF to Code Scanning
         uses: github/codeql-action/upload-sarif@v4.30.8
@@ -52,7 +63,7 @@ jobs:
           sarif_file: report.sarif
 
       - name: Upload SARIF artifact
-        uses: actions/upload-artifact@v4.6.2
+        uses: actions/upload-artifact@v3
         with:
           name: sarif-report
-          path: re port.sarif
+          path: report.sarif
