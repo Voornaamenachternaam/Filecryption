@@ -53,7 +53,7 @@ jobs:
 
     steps:
       - name: Log build target
-        run: echo "Building for target: ${{ matrix.target }}"
+        run: echo "Building for target ${{ matrix.target }}"
 
       - name: Checkout repository
         uses: actions/checkout@v5.0.0
