@@ -5,7 +5,7 @@ permissions:
 on:
   release:
     types: [published]
-    workflow_dispatch:
+  workflow_dispatch:
 
 env:
   CARGO_INCREMENTAL: 0
@@ -15,10 +15,10 @@ env:
   RUST_BACKTRACE: 1
   RUSTFLAGS: -D warnings
   RUSTUP_MAX_RETRIES: 10
-  CARGO_PROFILE_RELEASE_LTO: true 
-  CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 1 
-  CARGO_PROFILE_RELEASE_OPT_LEVEL: 3 
-  CARGO_PROFILE_RELEASE_PANIC: abort 
+  CARGO_PROFILE_RELEASE_LTO: true
+  CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 1
+  CARGO_PROFILE_RELEASE_OPT_LEVEL: 3
+  CARGO_PROFILE_RELEASE_PANIC: abort
   CARGO_PROFILE_RELEASE_STRIP: true
 
 defaults:
@@ -50,7 +50,6 @@ jobs:
             use_cross: false
     env:
       CARGO_HOME: /home/runner/.cargo
-
     steps:
       - name: Log build target
         run: echo "Building for target ${{ matrix.target }}"
@@ -104,12 +103,12 @@ jobs:
       - name: Strip binary (Linux/macOS)
         if: ${{ runner.os != 'Windows' }}
         run: |
-          strip "cargocrypt/target/${{ matrix.target }}/release/filecryption" || echo "Skipping strip (not supported)"
+          strip "cargocrypt/target/${{ matrix.target }}/release/cargocrypt" || echo "Skipping strip (not supported)"
 
       - name: Strip binary (Windows)
         if: ${{ runner.os == 'Windows' }}
         run: |
-          llvm-strip.exe "cargocrypt/target/${{ matrix.target }}/release/filecryption.exe" || echo "Skipping strip (not supported)"
+          llvm-strip.exe "cargocrypt/target/${{ matrix.target }}/release/cargocrypt.exe" || echo "Skipping strip (not supported)"
 
       - name: Upload Rust binary to release
         uses: taiki-e/upload-rust-binary-action@v1.27.0
