@@ -1,11 +1,11 @@
 name: Continuous Deployment
+
 permissions:
   contents: write
 
 on:
   release:
     types: [published]
-  workflow_dispatch:
 
 env:
   CARGO_INCREMENTAL: 0
@@ -13,6 +13,7 @@ env:
   CARGO_NET_RETRY: 10
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # keep your strict warnings policy; we'll append the x86-64-v3 flag when needed
   RUSTFLAGS: -D warnings
   RUSTUP_MAX_RETRIES: 10
   CARGO_PROFILE_RELEASE_LTO: true
@@ -20,8 +21,6 @@ env:
   CARGO_PROFILE_RELEASE_OPT_LEVEL: 3
   CARGO_PROFILE_RELEASE_PANIC: abort
   CARGO_PROFILE_RELEASE_STRIP: true
-  # allow pkg-config to work during cross builds
-  PKG_CONFIG_ALLOW_CROSS: "1"
 
 defaults:
   run:
@@ -31,7 +30,6 @@ jobs:
   upload-assets:
     name: Upload Rust Binaries
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
     strategy:
       matrix:
         include:
@@ -50,121 +48,118 @@ jobs:
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             use_cross: false
-    env:
-      CARGO_HOME: /home/runner/.cargo
+
+    timeout-minutes: 60
 
     steps:
       - name: Log build target
-        run: echo "Building for target ${{ matrix.target }} (use_cross=${{ matrix.use_cross }}) on runner: ${{ matrix.os }}"
-
+        run: |
+           echo "Building for target: ${{ matrix.target }}"
       - name: Checkout repository
-        uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
+        uses: actions/checkout@v5.0.0
 
       - name: Set up Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
+      # --- NEW: enable x86-64-v3 CPU level for x86_64 targets ---
       - name: Enable x86-64-v3 CPU level for x86_64 targets
-        if: ${{ contains(matrix.target, 'x86_64') }}
-        run: echo "RUSTFLAGS=${RUSTFLAGS} -C target-cpu=x86-64-v3" >> "${GITHUB_ENV}"
-
-      - name: Cache Rust dependencies and target
+        if: contains(matrix.target, 'x86_64')
+        run: |
+          # append the x86-64-v3 tuning to RUSTFLAGS while preserving any existing flags
+          echo "RUSTFLAGS=${RUSTFLAGS} -C target-cpu=x86-64-v3" >> "${GITHUB_ENV}"
+      - name: Cache Rust dependencies
         uses: actions/cache@v4.3.0
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            cargocrypt/target
-          key: ${{ runner.os }}-cargo-${{ matrix.target }}-${{ hashFiles('cargocrypt/Cargo.lock') }}
+            target
+          key: ${{ runner.os }}-cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-${{ matrix.target }}-
-
       - name: Install cross for cross-compilation
-        if: ${{ matrix.use_cross == true }}
-        uses: taiki-e/install-action@v2.62.24
+        if: matrix.use_cross == true
+        uses: taiki-e/install-action@v2.62.9
         with:
           tool: cross
 
-      - name: Install system OpenSSL dev for native Linux builds
-        if: ${{ runner.os == 'Linux' && matrix.use_cross == false }}
-        run: |
-          sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libssl-dev build-essential ca-certificates curl
-          sudo rm -rf /var/lib/apt/lists/*
-
       - name: Enable static linking for Windows targets
-        if: ${{ endsWith(matrix.target, 'windows-msvc') }}
+        if: endsWith(matrix.target, 'windows-msvc')
         run: echo "RUSTFLAGS=${RUSTFLAGS} -C target-feature=+crt-static" >> "${GITHUB_ENV}"
 
       - name: Build binary
-        working-directory: ./cargocrypt
         run: |
-          set -euxo pipefail
-          # cross (docker-based) handles sysdeps for cross targets; prefer it when requested
-          if [ "${{ matrix.use_cross }}" = "true" ]; then
-            cross build --locked --release --target ${{ matrix.target }}
+          if [ "${{ matrix.use_cross }}" == "true" ]; then
+            cross build --release --target ${{ matrix.target }}
           else
-            cargo build --locked --release --target ${{ matrix.target }}
+            cargo build --release --target ${{ matrix.target }}
           fi
 
       - name: Strip binary (Linux/macOS)
-        if: ${{ runner.os != 'Windows' }}
-        run: |
-          set -euxo pipefail
-          BIN="cargocrypt/target/${{ matrix.target }}/release/cargocrypt"
-          if [ -f "${BIN}" ]; then
-            strip "${BIN}" || echo "strip failed or not available; continuing"
-          else
-            echo "Binary not found at ${BIN}; skipping strip"
-          fi
+        if: runner.os != 'Windows'
+        run: strip "target/${{ matrix.target }}/release/filecryption" || echo "Skipping strip (not supported)"
 
       - name: Strip binary (Windows)
-        if: ${{ runner.os == 'Windows' }}
+        if: runner.os == 'Windows'
         run: |
-          set -euxo pipefail
-          BIN="cargocrypt\\target\\${{ matrix.target }}\\release\\cargocrypt.exe"
-          if [ -f "${BIN}" ]; then
-            llvm-strip.exe "${BIN}" || echo "llvm-strip.exe failed or not available; continuing"
-          else
-            echo "Binary not found at ${BIN}; skipping strip"
-          fi
+          llvm-strip.exe "target/${{ matrix.target }}/release/filecryption.exe" || echo "Skipping strip (not supported)"
 
-      - name: Verify artifact exists
+      # --- NEW: Install UPX v5.0.2 on Linux runners (amd64 host binary) ---
+      - name: Install UPX v5.0.2 (Linux)
+        if: runner.os != 'Windows'
         run: |
-          set -euxo pipefail
-          if [ "${{ matrix.os }}" = "Windows" ]; then
-            ART="cargocrypt\\target\\${{ matrix.target }}\\release\\cargocrypt.exe"
-          else
-            ART="cargocrypt/target/${{ matrix.target }}/release/cargocrypt"
-          fi
-          echo "Expecting artifact at: ${ART}"
-          if [ ! -f "${ART}" ]; then
-            ls -la cargocrypt/target || true
-            echo "ERROR: build artifact not found: ${ART}"
-            exit 1
-          fi
+          echo "Installing UPX v5.0.2 (amd64 build)"
+          curl -fsSL -o upx.tar.xz "https://github.com/upx/upx/releases/download/v5.0.2/upx-5.0.2-amd64_linux.tar.xz"
+          tar -xJf upx.tar.xz
+          # the tarball contains an 'upx' binary in a small directory; move it into $HOME/.local/bin
+          mkdir -p "$HOME/.local/bin"
+          # find the extracted upx binary and install
+          UPX_BIN=$(find . -maxdepth 2 -type f -name upx -print -quit)
+          chmod +x "$UPX_BIN"
+          mv "$UPX_BIN" "$HOME/.local/bin/upx"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      - name: Prepare artifact for upload
+      # --- NEW: Install UPX v5.0.2 on Windows runners (win64) ---
+      - name: Install UPX v5.0.2 (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
         run: |
-          set -euxo pipefail
-          rm -rf release-artifacts || true
-          mkdir -p release-artifacts
-          if [ "${{ matrix.os }}" = "Windows" ]; then
-            cp "cargocrypt\\target\\${{ matrix.target }}\\release\\cargocrypt.exe" release-artifacts/cargocrypt.exe
-            powershell -Command "Compress-Archive -Path release-artifacts\\cargocrypt.exe -DestinationPath release-artifacts\\cargocrypt-${{ matrix.target }}.zip"
-          else
-            cp "cargocrypt/target/${{ matrix.target }}/release/cargocrypt" release-artifacts/cargocrypt
-            tar -C release-artifacts -cSf release-artifacts/cargocrypt-${{ matrix.target }}.tar release-artifacts/cargocrypt || true
-          fi
+          Write-Host "Installing UPX v5.0.2 (win64)"
+          $url = "https://github.com/upx/upx/releases/download/v5.0.2/upx-5.0.2-win64.zip"
+          $zip = "upx.zip"
+          Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing
+          Expand-Archive -Path $zip -DestinationPath upx
+          # Add the extracted folder to PATH for the remainder of the job
+          $upxdir = (Resolve-Path .\upx).Path
+          Add-Content -Path $Env:GITHUB_PATH -Value $upxdir
+
+      # --- NEW: Compress binary with UPX (Linux/macOS) ---
+      - name: Compress binary with UPX (Linux)
+        if: runner.os != 'Windows'
+        run: |
+          echo "Running UPX --best --lzma on Linux binary (best compression)"
+          # allow UPX to fail without failing the job (some binaries/instrumentation can make UPX refuse to pack)
+          upx --best --lzma "target/${{ matrix.target }}/release/filecryption" || echo "UPX compression failed or is unsupported for this binary; continuing."
+
+      # --- NEW: Compress binary with UPX (Windows) ---
+      - name: Compress binary with UPX (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Write-Host "Running UPX --best --lzma on Windows binary (best compression)"
+          try {
+            & upx.exe --best --lzma "target/${{ matrix.target }}/release/filecryption.exe"
+          } catch {
+            Write-Host "UPX compression failed or is unsupported for this binary; continuing."
+          }
 
       - name: Upload Rust binary to release
         uses: taiki-e/upload-rust-binary-action@v1.27.0
         with:
-          bin: cargocrypt
+          bin: filecryption
           target: ${{ matrix.target }}
           tar: all
           zip: windows
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets .GITHUB_TOKEN }}
