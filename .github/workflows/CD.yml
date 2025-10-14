@@ -1,11 +1,11 @@
 name: Continuous Deployment
-
 permissions:
   contents: write
 
 on:
   release:
     types: [published]
+    workflow_dispatch:
 
 env:
   CARGO_INCREMENTAL: 0
@@ -13,9 +13,13 @@ env:
   CARGO_NET_RETRY: 10
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  # keep your strict warnings policy; we'll append the x86-64-v3 flag when needed
   RUSTFLAGS: -D warnings
   RUSTUP_MAX_RETRIES: 10
+  CARGO_PROFILE_RELEASE_LTO: true 
+  CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 1 
+  CARGO_PROFILE_RELEASE_OPT_LEVEL: 3 
+  CARGO_PROFILE_RELEASE_PANIC: abort 
+  CARGO_PROFILE_RELEASE_STRIP: true
 
 defaults:
   run:
@@ -25,6 +29,7 @@ jobs:
   upload-assets:
     name: Upload Rust Binaries
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     strategy:
       matrix:
         include:
@@ -43,66 +48,68 @@ jobs:
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             use_cross: false
-
-    timeout-minutes: 60
+    env:
+      CARGO_HOME: /home/runner/.cargo
 
     steps:
       - name: Log build target
-        run: |
-           echo "Building for target: ${{ matrix.target }}"
+        run: echo "Building for target: ${{ matrix.target }}"
 
       - name: Checkout repository
         uses: actions/checkout@v5.0.0
+        with:
+          fetch-depth: 0
 
       - name: Set up Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
-      # --- NEW: enable x86-64-v3 CPU level for x86_64 targets ---
       - name: Enable x86-64-v3 CPU level for x86_64 targets
-        if: contains(matrix.target, 'x86_64')
+        if: ${{ contains(matrix.target, 'x86_64') }}
         run: |
-          # append the x86-64-v3 tuning to RUSTFLAGS while preserving any existing flags
           echo "RUSTFLAGS=${RUSTFLAGS} -C target-cpu=x86-64-v3" >> "${GITHUB_ENV}"
 
-      - name: Cache Rust dependencies
+      - name: Cache Rust dependencies and target
         uses: actions/cache@v4.3.0
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+            cargocrypt/target
+          key: ${{ runner.os }}-cargo-${{ matrix.target }}-${{ hashFiles('cargocrypt/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-${{ matrix.target }}-
 
       - name: Install cross for cross-compilation
-        if: matrix.use_cross == true
+        if: ${{ matrix.use_cross == true }}
         uses: taiki-e/install-action@v2.62.28
         with:
           tool: cross
 
       - name: Enable static linking for Windows targets
-        if: endsWith(matrix.target, 'windows-msvc')
-        run: echo "RUSTFLAGS=${RUSTFLAGS} -C target-feature=+crt-static" >> "${GITHUB_ENV}"
+        if: ${{ endsWith(matrix.target, 'windows-msvc') }}
+        run: |
+          echo "RUSTFLAGS=${RUSTFLAGS} -C target-feature=+crt-static" >> "${GITHUB_ENV}"
 
       - name: Build binary
+        working-directory: ./cargocrypt
         run: |
-          if [ "${{ matrix.use_cross }}" == "true" ]; then
+          if [ "${{ matrix.use_cross }}" = "true" ]; then
             cross build --release --target ${{ matrix.target }}
           else
             cargo build --release --target ${{ matrix.target }}
           fi
 
       - name: Strip binary (Linux/macOS)
-        if: runner.os != 'Windows'
-        run: strip "target/${{ matrix.target }}/release/filecryption" || echo "Skipping strip (not supported)"
+        if: ${{ runner.os != 'Windows' }}
+        run: |
+          strip "cargocrypt/target/${{ matrix.target }}/release/filecryption" || echo "Skipping strip (not supported)"
 
       - name: Strip binary (Windows)
-        if: runner.os == 'Windows'
+        if: ${{ runner.os == 'Windows' }}
         run: |
-          llvm-strip.exe "target/${{ matrix.target }}/release/filecryption.exe" || echo "Skipping strip (not supported)"
+          llvm-strip.exe "cargocrypt/target/${{ matrix.target }}/release/filecryption.exe" || echo "Skipping strip (not supported)"
 
       - name: Upload Rust binary to release
         uses: taiki-e/upload-rust-binary-action@v1.27.0
