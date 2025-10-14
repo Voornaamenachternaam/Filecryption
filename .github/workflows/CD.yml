@@ -139,16 +139,16 @@ jobs:
       - name: Compress binary with UPX (Linux)
         if: runner.os != 'Windows'
         run: |
-          echo "Running UPX --best --lzma on Linux binary (best compression)"
+          echo "Running upx --ultra-brute --no-lzma on Linux binary (best compression)"
           # allow UPX to fail without failing the job (some binaries/instrumentation can make UPX refuse to pack)
-          upx --best --lzma "target/${{ matrix.target }}/release/filecryption" || echo "UPX compression failed or is unsupported for this binary; continuing."
+          upx --ultra-brute --no-lzma "target/${{ matrix.target }}/release/filecryption" || echo "UPX compression failed or is unsupported for this binary; continuing."
 
       # --- NEW: Compress binary with UPX (Windows) ---
       - name: Compress binary with UPX (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Write-Host "Running UPX --best --lzma on Windows binary (best compression)"
+          Write-Host "Running upx --ultra-brute --no-lzma on Windows binary (best compression)"
           try {
             & upx.exe --best --lzma "target/${{ matrix.target }}/release/filecryption.exe"
           } catch {
