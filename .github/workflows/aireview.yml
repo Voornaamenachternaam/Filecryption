@@ -27,3 +27,4 @@ jobs:
           AI_PROVIDER: openrouter
           AI_MODEL: qwen/qwen3-235b-a22b:free
           AI_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          INCLUDE_PATTERNS: "*.toml,*.lock,**/*.rs,Cargo.*"
