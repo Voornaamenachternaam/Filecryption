@@ -30,16 +30,14 @@ jobs:
           rustup update stable
           rustup default stable
 
-      - name: Update Cargo.lock
-        run: cargo update --verbose
-
       - name: Fix
         run: cargo fix --edition --edition-idioms --verbose
+
+      - name: Update Cargo.lock
+        run: cargo update --verbose    
 
       - name: Build
         run: cargo build --verbose
 
       - name: Test
         run: cargo test --verbose
-
-  
