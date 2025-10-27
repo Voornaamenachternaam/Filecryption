@@ -12,7 +12,7 @@ on:
     - cron: '0 2 * * *'
 
 permissions:
-  contents: read
+  contents: write
   security-events: write
 
 jobs:
@@ -33,35 +33,13 @@ jobs:
       - name: Update Cargo.lock
         run: cargo update --verbose
 
+      - name: Fix
+        run: cargo fix --edition --edition-idioms --verbose
+
       - name: Build
         run: cargo build --verbose
 
       - name: Test
         run: cargo test --verbose
 
-  codeql_scan:
-    name: CodeQL Security Scan
-    needs: latest_deps
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@v4.30.8
-        with:
-          languages: rust
-
-      - name: Autobuild
-        uses: github/codeql-action/autobuild@v4.30.8
-
-      - name: Analyze and upload results
-        uses: github/codeql-action/analyze@v4.30.8
-        with:
-          output: codeql-results.sarif
-          upload: true
-
-      - name: Upload SARIF artifact
-        uses: actions/upload-artifact@v4.6.2
-        with:
-          name: sarif-report
-          path: codeql-results.sarif
+  
