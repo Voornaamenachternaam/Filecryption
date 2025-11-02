@@ -1,25 +1,28 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Drop-in streaming-based main.rs for Filecryption
 //! Uses orion::aead::streaming::* (StreamSealer, StreamOpener, StreamTag)
-//! Compatible with orion 0.17.11 and Rust 1.91 (matches your CI logs). :contentReference[oaicite:2]{index=2}
+//! Compatible with orion 0.17.11 and Rust 1.91 (matches your CI logs).
 
 use std::fs::{File, OpenOptions, read_dir};
-use std::io::{self, Read, Write, BufReader, BufWriter};
+use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::exit;
 
-use base64::{engine::general_purpose, Engine as _};
+use base64::{Engine as _, engine::general_purpose};
 use clap::{Parser, Subcommand};
-use orion::aead::{self, SecretKey};
+use orion::aead::SecretKey;
 use orion::aead::streaming::*;
 use orion::kdf;
-use rpassword;
-use zeroize::Zeroize;
+use rpassword::read_password;
+
+use zeroize::Zeroize; // kept if you later zeroize local buffers; can be removed if unused
 
 /// File that stores serialized params (salt + memory parameter)
 const FILEPARAM: &str = ".parameters.txt";
-/// How many bytes of salt — kdf::Salt::default() uses 16, but keep SALTSIZE conservative if needed.
+/// Salt length used for other contexts (not required for streaming nonce)
 const SALTSIZE: usize = 16;
+/// XChaCha20 nonce size (Orion uses 24 bytes for XChaCha)
+const NONCE_LEN: usize = 24;
 /// Suffix appended on encrypted files (for safety)
 const ENCRYPTSUFFIX: &str = "_encrypted";
 
@@ -110,9 +113,9 @@ fn prompt_or_use(provided: Option<String>, for_encrypt: bool) -> String {
     }
     if for_encrypt {
         println!("Enter a password to derive the encryption key (will be used with Argon2i):");
-        let pw = rpassword::read_password().expect("Failed to read password");
+        let pw = read_password().expect("Failed to read password");
         println!("Confirm password:");
-        let pw2 = rpassword::read_password().expect("Failed to read password");
+        let pw2 = read_password().expect("Failed to read password");
         if pw != pw2 {
             eprintln!("Passwords do not match.");
             exit(1);
@@ -120,22 +123,28 @@ fn prompt_or_use(provided: Option<String>, for_encrypt: bool) -> String {
         pw
     } else {
         println!("Enter the decryption password:");
-        rpassword::read_password().expect("Failed to read password")
+        read_password().expect("Failed to read password")
     }
 }
 
 /// Top-level path encrypt helper
 fn encrypt_path(path: &Path, password: &str) -> io::Result<()> {
     if path.is_dir() {
-        return Err(io::Error::new(io::ErrorKind::Other, "encrypt_path: expected file, got directory"));
+        return Err(io::Error::new(
+            io::ErrorKind::Other,
+            "encrypt_path: expected file, got directory",
+        ));
     }
-    let out_path = path.with_file_name(format!("{}{}", path.file_name().unwrap().to_string_lossy(), ENCRYPTSUFFIX));
+    let out_path = path.with_file_name(format!(
+        "{}{}",
+        path.file_name().unwrap().to_string_lossy(),
+        ENCRYPTSUFFIX
+    ));
     // Generate salt
     let salt = kdf::Salt::default(); // 16 bytes
     // Save params to a small `.parameters.txt` sidecar file (mem arg encoded + salt)
-    // We'll use memory parameter of 1<<16 (65536 KiB) and iterations 3 by default — these are conservative defaults.
-    // If you prefer different params, change below.
-    let mem_param: u32 = 1 << 16; // KiB
+    // We'll use memory parameter of 1<<16 and iterations 3 by default.
+    let mem_param: u32 = 1 << 16;
     let iter_param: u32 = 3;
     write_param_file(path, mem_param, &salt)?;
 
@@ -150,7 +159,10 @@ fn encrypt_path(path: &Path, password: &str) -> io::Result<()> {
 /// Top-level path decrypt helper
 fn decrypt_path(path: &Path, password: &str) -> io::Result<()> {
     if path.is_dir() {
-        return Err(io::Error::new(io::ErrorKind::Other, "decrypt_path: expected file, got directory"));
+        return Err(io::Error::new(
+            io::ErrorKind::Other,
+            "decrypt_path: expected file, got directory",
+        ));
     }
     // read parameters file (sidecar)
     let parent = path.parent().unwrap_or(Path::new("."));
@@ -162,7 +174,7 @@ fn decrypt_path(path: &Path, password: &str) -> io::Result<()> {
     // output path: remove ENCRYPTSUFFIX if present
     let out_path = if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
         if name.ends_with(ENCRYPTSUFFIX) {
-            Path::new(&name[..name.len()-ENCRYPTSUFFIX.len()]).to_path_buf()
+            Path::new(&name[..name.len() - ENCRYPTSUFFIX.len()]).to_path_buf()
         } else {
             // append .decrypted if suffix not present
             Path::new(&format!("{}.decrypted", name)).to_path_buf()
@@ -186,8 +198,12 @@ fn traverse_and_encrypt(dir: &Path, password: &str) -> io::Result<()> {
         } else {
             // skip our param file and skip already encrypted files
             if let Some(fname) = p.file_name().and_then(|s| s.to_str()) {
-                if fname == FILEPARAM { continue; }
-                if fname.ends_with(ENCRYPTSUFFIX) { continue; }
+                if fname == FILEPARAM {
+                    continue;
+                }
+                if fname.ends_with(ENCRYPTSUFFIX) {
+                    continue;
+                }
             }
             encrypt_path(&p, password)?;
         }
@@ -204,7 +220,9 @@ fn traverse_and_decrypt(dir: &Path, password: &str) -> io::Result<()> {
             traverse_and_decrypt(&p, password)?;
         } else {
             if let Some(fname) = p.file_name().and_then(|s| s.to_str()) {
-                if fname == FILEPARAM { continue; }
+                if fname == FILEPARAM {
+                    continue;
+                }
                 // only attempt decrypt on files with ENCRYPTSUFFIX
                 if fname.ends_with(ENCRYPTSUFFIX) {
                     decrypt_path(&p, password)?;
@@ -219,9 +237,14 @@ fn traverse_and_decrypt(dir: &Path, password: &str) -> io::Result<()> {
 fn write_param_file(path: &Path, mem: u32, salt: &kdf::Salt) -> io::Result<()> {
     let parent = path.parent().unwrap_or(Path::new("."));
     let param_file = parent.join(FILEPARAM);
-    let mut f = OpenOptions::new().create(true).append(false).write(true).truncate(true).open(param_file)?;
+    let mut f = OpenOptions::new()
+        .create(true)
+        .append(false)
+        .write(true)
+        .truncate(true)
+        .open(param_file)?;
     // We'll store memory parameter and base64(salt)
-    let b64_salt = general_purpose::STANDARD.encode(salt.unprotected_as_bytes());
+    let b64_salt = general_purpose::STANDARD.encode(salt.as_ref());
     let line = format!("{}:{}\n", mem, b64_salt);
     f.write_all(line.as_bytes())?;
     Ok(())
@@ -235,37 +258,57 @@ fn read_param_file(param_file: &Path) -> io::Result<(u32, u32, kdf::Salt)> {
     // expected format: "<mem>:<base64salt>\n"
     let parts: Vec<&str> = buf.trim().split(':').collect();
     if parts.len() != 2 {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "param file malformed"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "param file malformed",
+        ));
     }
-    let mem: u32 = parts[0].trim().parse().map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid mem param"))?;
-    let salt_bytes = general_purpose::STANDARD.decode(parts[1].trim())
+    let mem: u32 = parts[0]
+        .trim()
+        .parse()
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid mem param"))?;
+    let salt_bytes = general_purpose::STANDARD
+        .decode(parts[1].trim())
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid base64 salt"))?;
-    let salt = kdf::Salt::from_slice(&salt_bytes).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid salt length"))?;
-    // iterations we're using a default of 3 (the code that wrote it used 3), but if you want to store it, extend format.
+    let salt = kdf::Salt::from_slice(&salt_bytes)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid salt length"))?;
+    // iterations we're using a default of 3, but can be extended in format later.
     let iterations: u32 = 3;
     Ok((iterations, mem, salt))
 }
 
 /// Derive an orion secret key from a password and salt using orion::kdf::derive_key
-fn derive_secret_key_from_password(password: &str, salt: &kdf::Salt, iterations: u32, memory_kib: u32) -> io::Result<SecretKey> {
+fn derive_secret_key_from_password(
+    password: &str,
+    salt: &kdf::Salt,
+    iterations: u32,
+    memory_kib: u32,
+) -> io::Result<SecretKey> {
     // convert to kdf::Password wrapper
-    let password_kdf = kdf::Password::from_slice(password.as_bytes()).map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "password invalid"))?;
+    let password_kdf = kdf::Password::from_slice(password.as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "password invalid"))?;
     // desired length for key = 32 bytes (XChaCha20-Poly1305 key size)
     let desired_len = 32u32;
     let dk = kdf::derive_key(&password_kdf, salt, iterations, memory_kib, desired_len)
         .map_err(|_| io::Error::new(io::ErrorKind::Other, "kdf derive_key failed"))?;
-    // dk is the crate's high-level SecretKey type (compatible with aead::SecretKey)
-    // Return as aead::SecretKey (same underlying type in orion's high-level API)
     Ok(dk)
 }
 
 /// Encrypt a file using streaming AEAD.
 /// File format:
-/// [nonce bytes (Nonce::len())][u64_be len-of-chunk1][chunk1 bytes][u64_be len-of-chunk2][chunk2 bytes]...
-fn encrypt_file_streaming(in_path: &Path, out_path: &Path, secret_key: &SecretKey) -> io::Result<()> {
+/// [nonce bytes (NONCE_LEN)][u64_be len-of-chunk1][chunk1 bytes][u64_be len-of-chunk2][chunk2 bytes]...
+fn encrypt_file_streaming(
+    in_path: &Path,
+    out_path: &Path,
+    secret_key: &SecretKey,
+) -> io::Result<()> {
     let infile = File::open(in_path)?;
     let mut rdr = BufReader::new(infile);
-    let outfile = OpenOptions::new().create(true).write(true).truncate(true).open(out_path)?;
+    let outfile = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(out_path)?;
     let mut wtr = BufWriter::new(outfile);
 
     // Create the StreamSealer and get the nonce
@@ -279,49 +322,50 @@ fn encrypt_file_streaming(in_path: &Path, out_path: &Path, secret_key: &SecretKe
     loop {
         let read = rdr.read(&mut buffer)?;
         if read == 0 {
-            // nothing more to read: send a zero-length Finish message to mark stream end (some implementations don't need it,
-            // but we follow the recommended pattern to ensure opener can detect truncation).
-            let encrypted_chunk = sealer.seal_chunk(&[], &StreamTag::Finish)
+            // nothing more to read: send a zero-length Finish message to mark stream end
+            let encrypted_chunk = sealer
+                .seal_chunk(&[], &StreamTag::Finish)
                 .map_err(|_| io::Error::new(io::ErrorKind::Other, "seal_chunk failed"))?;
-            // write chunk length then chunk
             let len = encrypted_chunk.len() as u64;
             wtr.write_all(&len.to_be_bytes())?;
             wtr.write_all(&encrypted_chunk)?;
             break;
         } else {
-            // Determine tag: if read < chunk_size -> probably last chunk (but we still treat final chunk explicitly only when EOF next iteration).
-            // To be safe, when read < buffer.len() and next read will be 0, we will set Finish below.
-            // Simpler: we mark normal message unless read < buffer.len() and rdr.peek isn't available; instead detect EOF by using exact read < CHUNK_SIZE and no more bytes:
-            // We'll check if read < CHUNK_SIZE and then use Finish tag, else Message.
-            let tag = if read < CHUNK_SIZE { &StreamTag::Message } else { &StreamTag::Message }; // default Message
-            // We'll decide Finish when we reach EOF in the next iteration; but to guarantee the stream ends we will set Finish on the final explicit zero-length message above.
-            let encrypted_chunk = sealer.seal_chunk(&buffer[..read], tag)
+            // Use message tag for each chunk; we rely on final zero-length Finish chunk above
+            let encrypted_chunk = sealer
+                .seal_chunk(&buffer[..read], &StreamTag::Message)
                 .map_err(|_| io::Error::new(io::ErrorKind::Other, "seal_chunk failed"))?;
             let len = encrypted_chunk.len() as u64;
             wtr.write_all(&len.to_be_bytes())?;
             wtr.write_all(&encrypted_chunk)?;
-            // continue until EOF; finalization already handled by the zero-length Finish chunk above.
         }
     }
 
     // Ensure data is flushed
     wtr.flush()?;
-
     Ok(())
 }
 
 /// Decrypt file that follows the format produced by encrypt_file_streaming
-fn decrypt_file_streaming(in_path: &Path, out_path: &Path, secret_key: &SecretKey) -> io::Result<()> {
+fn decrypt_file_streaming(
+    in_path: &Path,
+    out_path: &Path,
+    secret_key: &SecretKey,
+) -> io::Result<()> {
     let infile = File::open(in_path)?;
     let mut rdr = BufReader::new(infile);
-    let outfile = OpenOptions::new().create(true).write(true).truncate(true).open(out_path)?;
+    let outfile = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(out_path)?;
     let mut wtr = BufWriter::new(outfile);
 
     // Read nonce
-    // Nonce length is provided by the Nonce type; the streaming module re-exports Nonce
-    let mut nonce_buf = vec![0u8; Nonce::len()];
+    let mut nonce_buf = vec![0u8; NONCE_LEN];
     rdr.read_exact(&mut nonce_buf)?;
-    let nonce = Nonce::from_slice(&nonce_buf).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid nonce"))?;
+    let nonce = Nonce::from_slice(&nonce_buf)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid nonce"))?;
     let mut opener = StreamOpener::new(secret_key, &nonce)
         .map_err(|_| io::Error::new(io::ErrorKind::Other, "Failed to create StreamOpener"))?;
 
@@ -329,7 +373,7 @@ fn decrypt_file_streaming(in_path: &Path, out_path: &Path, secret_key: &SecretKe
     loop {
         let mut lenbuf = [0u8; 8];
         match rdr.read_exact(&mut lenbuf) {
-            Ok(()) => {},
+            Ok(()) => {}
             Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
                 // no more chunks; done
                 break;
@@ -338,16 +382,18 @@ fn decrypt_file_streaming(in_path: &Path, out_path: &Path, secret_key: &SecretKe
         }
         let chunk_len = u64::from_be_bytes(lenbuf) as usize;
         if chunk_len == 0 {
-            // Nothing — continue (shouldn't happen because we always write a final non-empty sealed chunk)
+            // nothing to do
             continue;
         }
         let mut chunk = vec![0u8; chunk_len];
         rdr.read_exact(&mut chunk)?;
-        // open this chunk
-        let (plain, tag) = opener.open_chunk(&chunk)
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "open_chunk failed: authentication error"))?;
+        let (plain, tag) = opener.open_chunk(&chunk).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "open_chunk failed: authentication error",
+            )
+        })?;
         wtr.write_all(&plain)?;
-        // If the tag indicates finish, break
         if tag == StreamTag::Finish {
             break;
         }
@@ -356,4 +402,3 @@ fn decrypt_file_streaming(in_path: &Path, out_path: &Path, secret_key: &SecretKe
     wtr.flush()?;
     Ok(())
 }
- 
