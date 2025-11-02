@@ -10,20 +10,17 @@
 
 use base64::{engine::general_purpose, Engine as _};
 use clap::{Parser, ValueEnum};
-use orion::aead::streaming::*;
 use orion::aead::{self, open, seal};
+use orion::aead::streaming::{StreamSealer, StreamOpener, StreamTag, ABYTES};
 use orion::kdf;
 use std::ffi::OsStr;
-use std::fs::{self};
+use std::fs;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 use zeroize::Zeroize;
 use std::thread;
 use std::time::{self, Duration};
-
-use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
 
 const FILEPARAM: &str = ".parameters.txt";
 const SALTSIZE: usize = 24;
@@ -76,110 +73,59 @@ enum Action {
 }
 
 //
-// --- Small abstraction layer for filesystem / password / exit / sleep to enable deterministic Kani verification
+// Abstraction for FS / password / sleep / exit so we can provide deterministic Kani mocks
 //
 
-// Public helpers for the rest of the program to use (read/write/remove/exist/ask-password/sleep/fatal).
+// === Non-Kani (real) implementations ===
+#[cfg(not(kani))]
 fn read_all(path: &Path) -> io::Result<Vec<u8>> {
-    cfg_if::cfg_if! {
-        if #[cfg(kani)] {
-            kani_vfs::read(path)
-        } else {
-            fs::read(path)
-        }
-    }
+    fs::read(path)
 }
+#[cfg(not(kani))]
 fn read_to_string(path: &Path) -> io::Result<String> {
-    let data = read_all(path)?;
-    match String::from_utf8(data) {
-        Ok(s) => Ok(s),
-        Err(_) => Err(io::Error::new(io::ErrorKind::InvalidData,"Invalid UTF-8")),
-    }
+    fs::read_to_string(path)
 }
+#[cfg(not(kani))]
 fn write_new_file(path: &Path, data: &[u8]) -> io::Result<()> {
-    cfg_if::cfg_if! {
-        if #[cfg(kani)] {
-            kani_vfs::create_new(path, data)
-        } else {
-            // mimic create_new(true) semantics
-            if path.exists() {
-                return Err(io::Error::new(io::ErrorKind::AlreadyExists,"File exists"));
-            }
-            fs::write(path, data)
-        }
+    // mimic create_new(true): fail if exists
+    if path.exists() {
+        Err(io::Error::new(io::ErrorKind::AlreadyExists, "File exists"))
+    } else {
+        fs::write(path, data)
     }
 }
+#[cfg(not(kani))]
 fn write_over(path: &Path, data: &[u8]) -> io::Result<()> {
-    cfg_if::cfg_if! {
-        if #[cfg(kani)] {
-            kani_vfs::write_over(path, data)
-        } else {
-            fs::write(path, data)
-        }
-    }
+    fs::write(path, data)
 }
+#[cfg(not(kani))]
 fn remove_file(path: &Path) -> io::Result<()> {
-    cfg_if::cfg_if! {
-        if #[cfg(kani)] {
-            kani_vfs::remove(path)
-        } else {
-            fs::remove_file(path)
-        }
-    }
+    fs::remove_file(path)
 }
+#[cfg(not(kani))]
 fn try_exists(path: &Path) -> io::Result<bool> {
-    cfg_if::cfg_if! {
-        if #[cfg(kani)] {
-            kani_vfs::exists(path)
-        } else {
-            path.try_exists()
-        }
-    }
+    path.try_exists()
 }
+#[cfg(not(kani))]
 fn read_password_prompt(_prompt: &str) -> io::Result<String> {
-    cfg_if::cfg_if! {
-        if #[cfg(kani)] {
-            // deterministic
-            Ok(String::from("kani-test-password"))
-        } else {
-            match rpassword::read_password() {
-                Ok(s) => Ok(s),
-                Err(e) => Err(io::Error::new(io::ErrorKind::Other, format!("{}", e))),
-            }
-        }
-    }
+    rpassword::read_password().map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{}", e)))
 }
+#[cfg(not(kani))]
 fn sleep_secs(s: u64) {
-    cfg_if::cfg_if! {
-        if #[cfg(kani)] {
-            // no-op for verification
-            let _ = s;
-        } else {
-            thread::sleep(Duration::new(s, 0));
-        }
-    }
+    thread::sleep(Duration::new(s, 0));
 }
+#[cfg(not(kani))]
 fn fatal_exit(msg: &str) -> ! {
-    cfg_if::cfg_if! {
-        if #[cfg(kani)] {
-            // panic during verification so Kani can reason about failure paths
-            panic!("{}", msg);
-        } else {
-            eprintln!("{}", msg);
-            std::process::exit(1);
-        }
-    }
+    eprintln!("{}", msg);
+    std::process::exit(1);
 }
 
-//
-// --- Kani VFS (only compiled when Kani runs). Keeps an in-memory filesystem
-//
+// === Kani (mocked) implementations ===
 #[cfg(kani)]
 mod kani_vfs {
-    use super::*;
+    use std::collections::HashMap;
     use std::io;
     use std::path::Path;
-    use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
 
     static STORE: OnceLock<Mutex<HashMap<String, Vec<u8>>>> = OnceLock::new();
@@ -196,6 +142,7 @@ mod kani_vfs {
             None => Err(io::Error::new(io::ErrorKind::NotFound, "not found")),
         }
     }
+
     pub fn create_new(path: &Path, data: &[u8]) -> io::Result<()> {
         let key = path.to_string_lossy().to_string();
         let mut map = store().lock().unwrap();
@@ -205,12 +152,14 @@ mod kani_vfs {
         map.insert(key, data.to_vec());
         Ok(())
     }
+
     pub fn write_over(path: &Path, data: &[u8]) -> io::Result<()> {
         let key = path.to_string_lossy().to_string();
         let mut map = store().lock().unwrap();
         map.insert(key, data.to_vec());
         Ok(())
     }
+
     pub fn remove(path: &Path) -> io::Result<()> {
         let key = path.to_string_lossy().to_string();
         let mut map = store().lock().unwrap();
@@ -220,19 +169,19 @@ mod kani_vfs {
             Err(io::Error::new(io::ErrorKind::NotFound, "not found"))
         }
     }
+
     pub fn exists(path: &Path) -> io::Result<bool> {
         let key = path.to_string_lossy().to_string();
         let map = store().lock().unwrap();
         Ok(map.contains_key(&key))
     }
 
-    // Helper used by the test harness to populate the VFS
+    // Helpers for the Kani harnesses to populate the VFS
     pub fn put(path: &str, data: &[u8]) {
         let mut map = store().lock().unwrap();
         map.insert(path.to_string(), data.to_vec());
     }
 
-    // Helper used by the test harness to list contents (not used in production)
     #[allow(dead_code)]
     pub fn list_keys() -> Vec<String> {
         let map = store().lock().unwrap();
@@ -240,8 +189,48 @@ mod kani_vfs {
     }
 }
 
+#[cfg(kani)]
+fn read_all(path: &Path) -> io::Result<Vec<u8>> {
+    kani_vfs::read(path)
+}
+#[cfg(kani)]
+fn read_to_string(path: &Path) -> io::Result<String> {
+    kani_vfs::read(path).and_then(|v| {
+        String::from_utf8(v).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid UTF-8"))
+    })
+}
+#[cfg(kani)]
+fn write_new_file(path: &Path, data: &[u8]) -> io::Result<()> {
+    kani_vfs::create_new(path, data)
+}
+#[cfg(kani)]
+fn write_over(path: &Path, data: &[u8]) -> io::Result<()> {
+    kani_vfs::write_over(path, data)
+}
+#[cfg(kani)]
+fn remove_file(path: &Path) -> io::Result<()> {
+    kani_vfs::remove(path)
+}
+#[cfg(kani)]
+fn try_exists(path: &Path) -> io::Result<bool> {
+    kani_vfs::exists(path)
+}
+#[cfg(kani)]
+fn read_password_prompt(_prompt: &str) -> io::Result<String> {
+    // deterministic password for verification
+    Ok(String::from("kani-test-password"))
+}
+#[cfg(kani)]
+fn sleep_secs(_s: u64) {
+    // no-op for verification
+}
+#[cfg(kani)]
+fn fatal_exit(msg: &str) -> ! {
+    panic!("{}", msg);
+}
+
 //
-// End of abstraction layer
+// End of abstraction helpers
 //
 
 fn extractmasterkey(
@@ -249,7 +238,7 @@ fn extractmasterkey(
     path: &Path,
     argon2: u8,
     password: &Option<String>,
-) -> orion::aead::SecretKey {
+) -> aead::SecretKey {
     #[allow(unused_assignments, unused_mut)]
     let mut salt;
     #[allow(unused_assignments)]
@@ -276,19 +265,11 @@ fn extractmasterkey(
                 eprintln!("Parameters file cannot be found! Cannot decrypt.");
                 fatal_exit("Missing parameters");
             } else {
-                // Normal run: generate secure salt; during Kani: deterministic salt produced by orion is fine too,
-                // but deterministic behaviour is ensured by the VFS test harness.
                 salt = kdf::Salt::generate(SALTSIZE).expect("Cannot generate secure salt");
                 calc = argon2;
                 let text = format!("{}:{}", calc, &general_purpose::STANDARD.encode(&salt));
-                // Create new params file, but fail if it already exists (mimic create_new)
-                let file = write_new_file(path, text.as_bytes());
-                if file.is_err() {
-                    eprintln!(
-                        "The error is {:?} for the file {:?}",
-                        file.unwrap_err(),
-                        path.file_name()
-                    );
+                if let Err(e) = write_new_file(path, text.as_bytes()) {
+                    eprintln!("The error is {:?} for the file {:?}", e, path.file_name());
                     fatal_exit("Cannot create parameters file");
                 }
             }
@@ -324,7 +305,7 @@ fn extractmasterkey(
                     password2 = read_password_prompt(encryptpass2).expect("Cannot read password");
                     password2orion = kdf::Password::from_slice(password2.as_bytes()).unwrap();
                     if password2orion == passwordorion {
-                        // Constant-time equality already provided by the type
+                        // Constant-time comparison semantics provided by the type
                         break;
                     }
                     // Limit force cracking
@@ -336,7 +317,6 @@ fn extractmasterkey(
             }
         }
     };
-    // Derive the key. Note: large argon2 values may be heavy; callers (and the Compute subcommand) control argon2.
     let derived_key =
         kdf::derive_key(&passwordorion, &salt, 3, 1 << calc, 32).unwrap_or_else(|_| {
             fatal_exit("Cannot derive key");
@@ -490,11 +470,12 @@ pub fn encryptastream(
         outbuf.extend_from_slice(nonce.as_ref());
 
         for (n_chunk, src_chunk) in data.chunks(CHUNK_SIZE).enumerate() {
-            let encrypted_chunk = if src_chunk.len() != CHUNK_SIZE || n_chunk + 1 == data.len() / CHUNK_SIZE {
-                sealer.seal_chunk(src_chunk, &StreamTag::Finish).unwrap()
-            } else {
-                sealer.seal_chunk(src_chunk, &StreamTag::Message).unwrap()
-            };
+            let encrypted_chunk =
+                if src_chunk.len() != CHUNK_SIZE || n_chunk + 1 == data.len() / CHUNK_SIZE {
+                    sealer.seal_chunk(src_chunk, &StreamTag::Finish).unwrap()
+                } else {
+                    sealer.seal_chunk(src_chunk, &StreamTag::Message).unwrap()
+                };
             outbuf.extend_from_slice(&encrypted_chunk);
         }
 
@@ -571,7 +552,7 @@ pub fn decryptastream(
         filename = String::from(filename.as_str().trim_end_matches(ENCRYPTSUFFIX)); //Remove last _encrypted
         let (pathname, filenameplain) = getparent(Path::new(&filename));
         let pathname = Path::new(&pathname);
-        let mut newfilename = Path::new(&filename).to_path_buf();
+        let mut newfilename = Path::Path::new(&filename).to_path_buf();
 
         // If filenamencrypt is true, attempt to decrypt filename bytes (URL_SAFE decode first)
         if filenamencrypt {
@@ -633,7 +614,7 @@ pub fn decryptastream(
             eprintln!("The error is {} for the file {:?}", e, &filedata);
             continue;
         }
-        if let Err(e) = remove_file(Path::new(&filedata)) {
+        if let Err(e) = remove_file(Path::Path::new(&filedata)) {
             eprintln!("The error is {} for the file {}", e, &filedata);
             continue;
         }
@@ -709,49 +690,81 @@ fn main() {
 }
 
 //
-// --- Kani proof harnesses
+// Extended Kani harnesses (only compiled when Kani runs). They exercise roundtrip paths deterministically.
+// Added: filename-encryption harness and a compute-like harness plus a decrypt-with-params harness.
 //
 #[cfg(kani)]
 mod kani_tests {
     use super::*;
     use std::path::PathBuf;
 
-    // Small helper to populate the in-memory VFS for Kani tests
     fn put_file(path: &str, data: &[u8]) {
         kani_vfs::put(path, data);
     }
 
-    // Kani proof: ensure extractmasterkey can create parameters and derive a key
     #[kani::proof]
     fn proof_extract_master_key_create_and_derive() {
-        // create a deterministic, small password and ensure derive works
-        let params_path = Path::new(".parameters.txt");
-        // Ensure no params file exists initially in VFS
-        // Call extractmasterkey in encrypt mode to create the params file
+        let params_path = Path::new(FILEPARAM);
         let key = extractmasterkey(true, params_path, MIN_MEM_ARGON, &Some(String::from("pw")));
-        // Assert we got a SecretKey (length 32)
         assert_eq!(key.unprotected_as_bytes().len(), 32usize);
     }
 
-    // Kani proof: roundtrip encrypt -> decrypt for a tiny file
     #[kani::proof]
     fn proof_encrypt_then_decrypt_roundtrip() {
-        // Prepare a tiny file in the VFS
         let fname = "testfile.txt";
         put_file(fname, b"hello kani");
-        // Ensure parameters file doesn't exist so extractmasterkey will create it in encrypt mode
         let params_path = Path::new(FILEPARAM);
-        // Extract key for encrypt (use minimal argon to keep derive cost small)
         let secret_key = extractmasterkey(true, params_path, MIN_MEM_ARGON, &Some(String::from("pw")));
-        // Call encryptastream: it should create "testfile.txt_encrypted" and remove original
         encryptastream(&secret_key, vec![PathBuf::from(fname)], false, false);
-        // Now call decryptastream on the encrypted file
         let encrypted_name = format!("{}{}", fname, ENCRYPTSUFFIX);
-        // The decrypt function expects files with the ENCRYPTSUFFIX
         let result = decryptastream(&secret_key, vec![PathBuf::from(encrypted_name.clone())], false, false);
-        // On success, result should be true and the decrypted file should exist again (VFS)
         assert!(result);
-        // we also expect the original file now present in VFS as a new file; confirm by reading
         let _ = read_all(Path::new(fname)).expect("Decrypted file must be present");
+    }
+
+    #[kani::proof]
+    fn proof_filename_encrypt_then_decrypt_roundtrip() {
+        // Put a file in a directory to ensure parent path logic exercised
+        let fname = "d/testfile.txt";
+        put_file(fname, b"data-for-filename-encrypt");
+        let params_path = Path::new(FILEPARAM);
+        // make a secret key (create params)
+        let secret_key = extractmasterkey(true, params_path, MIN_MEM_ARGON, &Some(String::from("pw")));
+        // encrypt with filename encryption enabled
+        encryptastream(&secret_key, vec![PathBuf::from(fname)], false, true);
+        // compute expected encrypted filename: parent join + URL_SAFE.encode(seal(...)) + suffix
+        let (_parent, fname_plain) = getparent(Path::new(fname));
+        let encoded = general_purpose::URL_SAFE.encode(seal(&secret_key, fname_plain.as_bytes()).unwrap());
+        let encrypted_path = format!("d/{}{}", encoded, ENCRYPTSUFFIX);
+        // decrypt telling the function filename bytes are encoded
+        let result = decryptastream(&secret_key, vec![PathBuf::from(encrypted_path.clone())], false, true);
+        assert!(result);
+        // original file should be back in VFS
+        let _ = read_all(Path::Path::new(fname)).expect("Decrypted file must be present after filename decrypt");
+    }
+
+    #[kani::proof]
+    fn proof_compute_like_derive_keys() {
+        let user_password = kdf::Password::from_slice(b"compute-test").unwrap();
+        let salt = kdf::Salt::default();
+        // exercise a small contiguous range of Argon iterations to ensure derive_key succeeds
+        for i in MIN_MEM_ARGON..=MIN_MEM_ARGON + 2 {
+            let derived_key = kdf::derive_key(&user_password, &salt, 3, 1 << i, 32).unwrap();
+            assert_eq!(derived_key.unprotected_as_bytes().len(), 32usize);
+        }
+    }
+
+    #[kani::proof]
+    fn proof_extractmasterkey_decrypt_mode_with_params() {
+        // Create deterministic salt bytes and write a parameters file (mimics an existing params file)
+        let mut salt_bytes = [0u8; SALTSIZE];
+        for i in 0..SALTSIZE {
+            salt_bytes[i] = (i as u8).wrapping_add(1);
+        }
+        let encoded = general_purpose::STANDARD.encode(&salt_bytes);
+        let text = format!("{}:{}", MIN_MEM_ARGON, encoded);
+        kani_vfs::put(FILEPARAM, text.as_bytes());
+        let key = extractmasterkey(false, Path::new(FILEPARAM), MIN_MEM_ARGON, &Some(String::from("pw2")));
+        assert_eq!(key.unprotected_as_bytes().len(), 32usize);
     }
 }
