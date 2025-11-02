@@ -14,3 +14,4 @@ jobs:
         with:
           args: '--tests'
           enable-propproof: true
+          working-directory: './src'
