@@ -7,7 +7,7 @@ on:
 jobs:
   verify:
     # Kani currently requires Ubuntu 20.04 in CI; use that to ensure Kani runs.
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
