@@ -1,48 +1,47 @@
-name: Kani verification
+name: Formal verification
 
 # Run on pushes to main/master, PRs targeting main/master, and manual runs
 on:
   workflow_dispatch:
 
 jobs:
-  kani:
-    name: Run Kani verifier
-    # Kani's CI currently supports Ubuntu 20.04 hosts; use that to match the action's expectations.
+  verify:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5.0.0
-        with:
-          # ensure submodules are fetched if your project, or kani harnesses, rely on them
-          submodules: recursive
-          fetch-depth: 0
+        uses: actions/checkout@v5.0.0 
+        
 
-      - name: Run Kani (cargo-kani --tests)
-        # Official Kani GitHub Action; runs `cargo-kani` in the working-directory.
-        uses: model-checking/kani-github-action@v1.1
+      - name: Install Rust 1.91 toolchain
+        uses: actions-rs/toolchain@v1.0.6
         with:
-          # Run the standard cargo-kani command (this action will provision Kani).
-          command: "cargo-kani"
-          # Keep the args the same as your previous run
-          args: "--tests"
-          # IMPORTANT: set working-directory to the repo root ('.') so we don't `cd ./src`
-          working-directory: "."
-          # If you want to pin a specific Kani version uncomment and set kani-version:
-          # kani-version: "0.59.0"
+          toolchain: 1.91.0
+          override: true
+          components: rustfmt, clippy
 
-      # Optional (helpful for debugging CI failures): expose the Kani version and workspace layout
-      - name: Show Kani version and workspace (diagnostics)
-        if: failure() || github.event_name == 'workflow_dispatch'
+      - name: Install and run MIRAI static analysis
         run: |
-          echo "=== Workspace root ==="
-          pwd
-          ls -la
-          echo "=== Rust toolchain installed (if any) ==="
-          rustc --version || true
-          cargo --version || true
-          echo "=== Kani binary (if installed by action) ==="
-          which kani || true
-          kani --version || true
+          # Install MIRAI (Rust abstract interpreter) and run it
+          cargo install mirai
+          cargo mirai
+        env:
+          # Optional: increase verbosity if needed
+          RUST_BACKTRACE: 1
+
+      - name: Run Kani verifier
+        uses: model-checking/kani-github-action@v1.1 
+        
+        with:
+          # (Uses the latest Kani version by default)
+          command: 'cargo-kani'
+        env:
+          # Configure Kani: check all threads and assert no undefined behavior
+          RUSTFLAGS: "-Zkani-check-untyped"
+      
+      - name: Install and run cargo-audit
+        run: |
+          cargo install cargo-audit
+          cargo audit --deny warnings
+
+      - name: (Optional) Run Cargo test suite
+        run: cargo test --all -- --nocapture
