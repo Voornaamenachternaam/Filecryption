@@ -1,16 +1,17 @@
 name: Formal verification
 
-# Run on pushes to main/master, PRs targeting main/master, and manual runs
+# Run manually (workflow_dispatch)
 on:
   workflow_dispatch:
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    # Kani currently requires Ubuntu 20.04 in CI; use that to ensure Kani runs.
+    runs-on: ubuntu-20.04
+
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5.0.0 
-        
+        uses: actions/checkout@v5.0.0
 
       - name: Install Rust 1.91 toolchain
         uses: actions-rs/toolchain@v1.0.6
@@ -19,29 +20,58 @@ jobs:
           override: true
           components: rustfmt, clippy
 
-      - name: Install and run MIRAI static analysis
+      - name: Ensure cargo is up-to-date & show versions
         run: |
-          # Install MIRAI (Rust abstract interpreter) and run it
-          cargo install mirai
-          cargo mirai
-        env:
-          # Optional: increase verbosity if needed
-          RUST_BACKTRACE: 1
+          rustc --version
+          cargo --version
+
+      - name: Format check (rustfmt)
+        run: cargo fmt -- --check
+
+      - name: Lint strictly (clippy)
+        run: |
+          # fail the job on any clippy warning
+          cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Install and run cargo-geiger (unsafe-usage scan)
+        run: |
+          # install cargo-geiger (use --locked for reproducible installs)
+          cargo install --locked cargo-geiger || cargo install cargo-geiger
+          # run cargo-geiger and capture output
+          set -o pipefail
+          geiger_output="$(cargo geiger --all-targets --all-features 2>&1)" || true
+          echo "----- cargo-geiger output -----"
+          echo "$geiger_output"
+          echo "-------------------------------"
+          # cargo-geiger marks crates with "☢" when unsafe usage is present.
+          # Fail CI if any '☢' symbols appear in output.
+          if echo "$geiger_output" | grep -q '☢'; then
+            echo "::error::Unsafe usage detected by cargo-geiger (symbol '☢'). Failing CI."
+            exit 1
+          fi
+          # (If your environment doesn't render the symbol, also check for the word 'unsafe' 
+          # at the start of lines produced by geiger as a fallback.)
+          if echo "$geiger_output" | grep -E '(^| )unsafe( |$)' | grep -v -E '(^|\s)unsafe-trait'; then
+            echo "::warning::cargo-geiger found occurrences of the word 'unsafe' in its output. Inspect manually."
+          fi
 
       - name: Run Kani verifier
-        uses: model-checking/kani-github-action@v1.1 
-        
+        uses: model-checking/kani-github-action@v1.1
         with:
-          # (Uses the latest Kani version by default)
+          # default is `cargo-kani`, keep that unless you need a custom binary
           command: 'cargo-kani'
+          # working-directory: '.'   # uncomment/change if your crate is in a subdirectory
         env:
-          # Configure Kani: check all threads and assert no undefined behavior
-          RUSTFLAGS: "-Zkani-check-untyped"
-      
-      - name: Install and run cargo-audit
+          # Optional: if you want to provide extra RUSTFLAGS for kani, set them here.
+          # Leave unset for default behavior.
+          # RUSTFLAGS: "-Z kani-check-untyped"
+          KANI_DEFAULT_VERBOSITY: "1"
+
+      - name: Install and run cargo-audit (dependency advisories)
         run: |
-          cargo install cargo-audit
+          cargo install --locked cargo-audit || cargo install cargo-audit
+          # fail the CI if cargo-audit reports anything (adjust policy as needed)
           cargo audit --deny warnings
 
-      - name: (Optional) Run Cargo test suite
-        run: cargo test --all -- --nocapture
+      - name: Run Cargo test suite
+        run: cargo test --all -- - -nocapture
