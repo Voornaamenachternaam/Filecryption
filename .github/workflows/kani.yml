@@ -1,0 +1,16 @@
+name: Kani
+
+on: 
+  workflow_dispatch: {}  # Allows manual trigger from GitHub Actions UI
+  schedule:
+    - cron: "0 2 * * *"
+
+jobs:
+  kani:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run Kani
+        uses: model-checking/kani-github-action@v1.1
+        with:
+          args: '--tests'
+          enable-propproof: true
