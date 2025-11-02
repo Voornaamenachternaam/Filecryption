@@ -326,7 +326,7 @@ fn extractmasterkey(
 
 fn recurse_files(path: impl AsRef<Path>) -> std::io::Result<Vec<PathBuf>> {
     let mut buf = vec![];
-    let entries = std::fs::read_dir(path)?;
+    let entries = fs::read_dir(path)?;
 
     for entry in entries {
         let entry = entry?;
@@ -552,7 +552,7 @@ pub fn decryptastream(
         filename = String::from(filename.as_str().trim_end_matches(ENCRYPTSUFFIX)); //Remove last _encrypted
         let (pathname, filenameplain) = getparent(Path::new(&filename));
         let pathname = Path::new(&pathname);
-        let mut newfilename = Path::Path::new(&filename).to_path_buf();
+        let mut newfilename = Path::new(&filename).to_path_buf();
 
         // If filenamencrypt is true, attempt to decrypt filename bytes (URL_SAFE decode first)
         if filenamencrypt {
@@ -570,7 +570,7 @@ pub fn decryptastream(
                 );
                 continue;
             }
-            newfilename = Path::join(pathname, String::from_utf8(binaryfilename.unwrap()).unwrap());
+            newfilename = pathname.join(String::from_utf8(binaryfilename.unwrap()).unwrap());
         }
 
         // we'll collect decrypted bytes here
@@ -614,7 +614,7 @@ pub fn decryptastream(
             eprintln!("The error is {} for the file {:?}", e, &filedata);
             continue;
         }
-        if let Err(e) = remove_file(Path::Path::new(&filedata)) {
+        if let Err(e) = remove_file(Path::new(&filedata)) {
             eprintln!("The error is {} for the file {}", e, &filedata);
             continue;
         }
@@ -740,7 +740,7 @@ mod kani_tests {
         let result = decryptastream(&secret_key, vec![PathBuf::from(encrypted_path.clone())], false, true);
         assert!(result);
         // original file should be back in VFS
-        let _ = read_all(Path::Path::new(fname)).expect("Decrypted file must be present after filename decrypt");
+        let _ = read_all(Path::new(fname)).expect("Decrypted file must be present after filename decrypt");
     }
 
     #[kani::proof]
