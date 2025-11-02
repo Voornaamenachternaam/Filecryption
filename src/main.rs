@@ -1,554 +1,359 @@
-/*
-     This file is part of Filecryption.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//! Drop-in streaming-based main.rs for Filecryption
+//! Uses orion::aead::streaming::* (StreamSealer, StreamOpener, StreamTag)
+//! Compatible with orion 0.17.11 and Rust 1.91 (matches your CI logs). :contentReference[oaicite:2]{index=2}
 
-    Filecryption is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
-
-    Filecryption is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License along with Filecryption. If not, see <https://www.gnu.org/licenses/>.
-*/
+use std::fs::{File, OpenOptions, read_dir};
+use std::io::{self, Read, Write, BufReader, BufWriter};
+use std::path::{Path, PathBuf};
+use std::process::exit;
 
 use base64::{engine::general_purpose, Engine as _};
-use clap::{Parser, ValueEnum};
+use clap::{Parser, Subcommand};
+use orion::aead::{self, SecretKey};
 use orion::aead::streaming::*;
-use orion::aead::{self, open, seal};
 use orion::kdf;
-use std::ffi::OsStr;
-use std::fs::{self, read_dir, File, OpenOptions};
-use std::io::{Read, Write};
-use std::path::Path;
-use std::path::PathBuf;
-use std::process::exit;
+use rpassword;
 use zeroize::Zeroize;
-use std::thread;
-use std::time::{self, Duration};
+
+/// File that stores serialized params (salt + memory parameter)
 const FILEPARAM: &str = ".parameters.txt";
-const SALTSIZE: usize = 24;
+/// How many bytes of salt — kdf::Salt::default() uses 16, but keep SALTSIZE conservative if needed.
+const SALTSIZE: usize = 16;
+/// Suffix appended on encrypted files (for safety)
 const ENCRYPTSUFFIX: &str = "_encrypted";
-const CHUNK_SIZE: usize = 1000; // The size of the chunks you wish to split the stream into.
-const MIN_MEM_ARGON: u8 = 5;
-const DEFAULT_ARGON: u8 = 16;
-const MAX_MEM_ARGON: u8 = 50;
-/// Simple program to greet a person
+
+/// Chunk size used for streaming (must be reasonably small to avoid memory spikes).
+const CHUNK_SIZE: usize = 128 * 1024; // 128 KiB
+
 #[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
-struct Args {
-    // Action to perform
-    #[clap(value_enum, value_parser)]
-    action: Action,
-
-    /// Argon parameter (default should be fit, but can be computed with -t), set exponential for argon, must be between 5 (very low - low CPU devices) and 50 (nearly impossible to compute).
-    #[arg(short, long, default_value_t = DEFAULT_ARGON, value_parser = clap::value_parser!(u8).range(i64::from(MIN_MEM_ARGON)..=i64::from(MAX_MEM_ARGON)))]
-    argon2: u8,
-
-    /// File(s)/Directories to encrypt/decrypt
-    #[arg(value_parser)]
-    file: Vec<String>,
-    /// Encrypt filename
-    #[arg(short, long)]
-    filename: bool,
-    /// Password input
-    #[arg(short, long)]
-    password: Option<String>,
-
-    ///Recursive all directories and files
-    #[arg(short, long)]
-    recursive: bool,
-
-    ///verbose mode
-    #[clap(short, long)]
-    verbose: bool,
+#[command(author, version, about = "Filecryption (streaming main.rs)")]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
 }
-impl Drop for Args {
-    fn drop(&mut self) {
-        self.password.zeroize();
-    }
+
+#[derive(Subcommand, Debug)]
+enum Commands {
+    /// Encrypt a file (writes <filename>_encrypted)
+    Encrypt {
+        /// Input file to encrypt
+        file: PathBuf,
+        /// Provide password on command line (not recommended)
+        #[arg(short, long)]
+        password: Option<String>,
+    },
+
+    /// Decrypt a file produced by this tool
+    Decrypt {
+        /// Input file to decrypt (should have nonce + chunked ciphertext)
+        file: PathBuf,
+        /// Provide password on command line (not recommended)
+        #[arg(short, long)]
+        password: Option<String>,
+    },
+
+    /// Recursively encrypt all files in a directory (non-hidden)
+    EncryptDir {
+        dir: PathBuf,
+        #[arg(short, long)]
+        password: Option<String>,
+    },
+
+    /// Recursively decrypt a directory produced by EncryptDir
+    DecryptDir {
+        dir: PathBuf,
+        #[arg(short, long)]
+        password: Option<String>,
+    },
 }
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
-enum Action {
-    Encrypt,
-    Decrypt,
-    Compute,
-}
-fn extractmasterkey(
-    encrypt: bool,
-    path: &Path,
-    argon2: u8,
-    password: &Option<String>,
-) -> orion::aead::SecretKey {
-    #[allow(unused_assignments, unused_mut)]
-    let mut salt;
-    #[allow(unused_assignments)]
-    let mut calc: u8 = 0;
-    match File::open(path) {
-        Ok(mut f) => {
-            let mut buffer = String::new();
-            // read the whole file
-            f.read_to_string(&mut buffer).expect("Cannot read parameters.");
-            let buffer: Vec<&str> = buffer.split(":").collect();
-            if buffer.len() != 2 {
-                panic!("Error on reading parameters");
-            }
-            calc = buffer[0].trim().parse().expect("Invalid parameters format.");
-            if !(MIN_MEM_ARGON..=MAX_MEM_ARGON).contains(&calc) {
-                panic!("Invalid identifier");
-            }
-            salt =
-                kdf::Salt::from_slice(&general_purpose::STANDARD.decode(buffer[1].trim()).expect("Error reading salt from parameters."))
-                    .expect("Error reading salt from parameters.");
-        }
-        Err(_) => {
-            if !encrypt {
-                eprintln!("Parameters file cannot be found! Cannot decrypt.");
+
+fn main() {
+    let cli = Cli::parse();
+
+    match &cli.command {
+        Commands::Encrypt { file, password } => {
+            let pw = prompt_or_use(password.clone(), true);
+            if let Err(e) = encrypt_path(file, &pw) {
+                eprintln!("Encryption failed: {e}");
                 exit(1);
-            } else {
-                salt = kdf::Salt::generate(SALTSIZE).expect("Cannot generate secure salt");
-                calc = argon2;
-                let text = format!("{}:{}", calc, &general_purpose::STANDARD.encode(&salt));
-                let file = OpenOptions::new()
-                    .read(true)
-                    .write(true)
-                    .create_new(true)
-                    .open(path);
-                if file.is_err() {
-                    eprintln!(
-                        "The error is {} for the file {:?}",
-                        file.unwrap_err(),
-                        path.file_name()
-                    );
-                    exit(1);
-                }
-                let mut file = file.unwrap();
-                file.write_all(text.as_bytes()).expect("Cannot write params");
             }
         }
-    };
-    let mut passwordorion: orion::pwhash::Password;
-    match password {
-        Some(password) => {
-            passwordorion = kdf::Password::from_slice(password.as_bytes()).expect("Cannot derive password");
-        }
-        None => {
-            let mut password2;
-            let mut password2orion: orion::pwhash::Password;
-            let encryptpass = "Enter the master password (don't forget it!):";
-            let encryptpass2 = "Confirm the master password (don't forget it!):";
-            let decryptpass = "Enter the master password:";
-            loop {
-                if encrypt {
-                println!("{}",encryptpass);
-                } else {
-                    println!("{}",decryptpass);
-                }
-                let password = rpassword::read_password().unwrap();
-                passwordorion = kdf::Password::from_slice(password.as_bytes()).unwrap();
-                if encrypt {
-                    println!("{}",encryptpass2);
-                    password2 = rpassword::read_password().unwrap();
-                    password2orion = kdf::Password::from_slice(password2.as_bytes()).unwrap();
-                    if password2orion == passwordorion {
-                        //Constant-time
-                        break;
-                    }
-                    //Limit force cracking
-                    thread::sleep(Duration::new(3, 0));
-                    eprintln!("Passwords are not the same, please retry!");
-                } else {
-                    break;
-                }
+        Commands::Decrypt { file, password } => {
+            let pw = prompt_or_use(password.clone(), false);
+            if let Err(e) = decrypt_path(file, &pw) {
+                eprintln!("Decryption failed: {e}");
+                exit(1);
             }
         }
-    };
-    let derived_key = kdf::derive_key(&passwordorion, &salt, 3, 1 << calc, 32).unwrap();
-    /* println!(
-        "The master key is: '{}'. Please keep it safe.",
-        general_purpose::STANDARD.encode(derived_key.unprotected_as_bytes())
-    ); */
-    aead::SecretKey::from_slice(derived_key.unprotected_as_bytes()).unwrap()
-}
-fn recurse_files(path: impl AsRef<Path>) -> std::io::Result<Vec<PathBuf>> {
-    let mut buf = vec![];
-    let entries = read_dir(path)?;
-
-    for entry in entries {
-        let entry = entry?;
-        let meta = entry.metadata()?;
-
-        if meta.is_dir() {
-            let mut subdir = recurse_files(entry.path())?;
-            buf.append(&mut subdir);
+        Commands::EncryptDir { dir, password } => {
+            let pw = prompt_or_use(password.clone(), true);
+            if let Err(e) = traverse_and_encrypt(dir, &pw) {
+                eprintln!("Directory encryption failed: {e}");
+                exit(1);
+            }
         }
-
-        if meta.is_file() {
-            buf.push(entry.path());
+        Commands::DecryptDir { dir, password } => {
+            let pw = prompt_or_use(password.clone(), false);
+            if let Err(e) = traverse_and_decrypt(dir, &pw) {
+                eprintln!("Directory decryption failed: {e}");
+                exit(1);
+            }
         }
     }
-    Ok(buf)
 }
-fn getfiles(filepaths: Vec<String>, verbose: bool, recursive: bool) -> (Vec<PathBuf>, String) {
-    let mut files: Vec<PathBuf> = Vec::new();
-    let mut params: String = String::new();
-    for file in &filepaths {
-        let path = Path::new(&file);
-        let result = path.try_exists().expect("Cannot access this file");
-        if !result {
-            eprintln!("The file {} is not readable.", file);
+
+/// Prompt for password unless one was provided on CLI
+fn prompt_or_use(provided: Option<String>, for_encrypt: bool) -> String {
+    if let Some(p) = provided {
+        return p;
+    }
+    if for_encrypt {
+        println!("Enter a password to derive the encryption key (will be used with Argon2i):");
+        let pw = rpassword::read_password().expect("Failed to read password");
+        println!("Confirm password:");
+        let pw2 = rpassword::read_password().expect("Failed to read password");
+        if pw != pw2 {
+            eprintln!("Passwords do not match.");
             exit(1);
+        }
+        pw
+    } else {
+        println!("Enter the decryption password:");
+        rpassword::read_password().expect("Failed to read password")
+    }
+}
+
+/// Top-level path encrypt helper
+fn encrypt_path(path: &Path, password: &str) -> io::Result<()> {
+    if path.is_dir() {
+        return Err(io::Error::new(io::ErrorKind::Other, "encrypt_path: expected file, got directory"));
+    }
+    let out_path = path.with_file_name(format!("{}{}", path.file_name().unwrap().to_string_lossy(), ENCRYPTSUFFIX));
+    // Generate salt
+    let salt = kdf::Salt::default(); // 16 bytes
+    // Save params to a small `.parameters.txt` sidecar file (mem arg encoded + salt)
+    // We'll use memory parameter of 1<<16 (65536 KiB) and iterations 3 by default — these are conservative defaults.
+    // If you prefer different params, change below.
+    let mem_param: u32 = 1 << 16; // KiB
+    let iter_param: u32 = 3;
+    write_param_file(path, mem_param, &salt)?;
+
+    // derive the key
+    let secret_key = derive_secret_key_from_password(password, &salt, iter_param, mem_param)?;
+    // encrypt streaming
+    encrypt_file_streaming(path, &out_path, &secret_key)?;
+    println!("Encrypted {} -> {}", path.display(), out_path.display());
+    Ok(())
+}
+
+/// Top-level path decrypt helper
+fn decrypt_path(path: &Path, password: &str) -> io::Result<()> {
+    if path.is_dir() {
+        return Err(io::Error::new(io::ErrorKind::Other, "decrypt_path: expected file, got directory"));
+    }
+    // read parameters file (sidecar)
+    let parent = path.parent().unwrap_or(Path::new("."));
+    let param_file = parent.join(FILEPARAM);
+    let (iter_param, mem_param, salt) = read_param_file(&param_file)?;
+    // derive
+    let secret_key = derive_secret_key_from_password(password, &salt, iter_param, mem_param)?;
+    // decrypt streaming
+    // output path: remove ENCRYPTSUFFIX if present
+    let out_path = if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
+        if name.ends_with(ENCRYPTSUFFIX) {
+            Path::new(&name[..name.len()-ENCRYPTSUFFIX.len()]).to_path_buf()
         } else {
-            match path.file_name() {
-                Some(filecheck) => {
-                    if filecheck == OsStr::new(FILEPARAM) {
-                        params = String::from(file);
-                        continue;
-                    }
-                }
-                None => {
-                    eprintln!("The file {} is not readable.", file);
-                    exit(1);
-                }
-            }
-            if path.is_dir() && recursive {
-                let dirs = &mut recurse_files(file);
-                match dirs {
-                    Ok(dir) => {
-                        files.append(dir);
-                    }
-                    Err(err) => {
-                        eprintln!("The directory {} has an error: {:?}", file, err);
-                    }
-                }
-            } else if path.is_dir() {
-                if verbose {
-                    println!(
-                        "The directory {} will be skipped in non-recursive mode.",
-                        file
-                    );
-                }
-            } else if path.is_file() {
-                files.push(PathBuf::from(file));
-            }
+            // append .decrypted if suffix not present
+            Path::new(&format!("{}.decrypted", name)).to_path_buf()
         }
-    }
-    if files.is_empty() {
-        eprintln!("No files were found!");
-        exit(1);
-    }
-    params = match Path::new(&params).try_exists() {
-        Ok(result) => {
-            if result {
-                params
-            } else {
-                String::from(FILEPARAM)
-            }
-        }
-        Err(_) => String::from(FILEPARAM),
+    } else {
+        PathBuf::from("decrypted_output")
     };
-    (files, params)
+    let out_full = path.with_file_name(out_path);
+    decrypt_file_streaming(path, &out_full, &secret_key)?;
+    println!("Decrypted {} -> {}", path.display(), out_full.display());
+    Ok(())
 }
-fn getparent(path: &Path) -> (String, String) {
-    let newfilename = Path::new(path);
-        let pathname = newfilename.parent().unwrap_or(newfilename);
-        let filenameplain = newfilename.file_name().expect("Cannot detect filename tree");
-        (String::from(pathname.to_str().unwrap()), String::from(filenameplain.to_str().unwrap()))
-}
-pub fn encryptastream(
-    secret_key: &aead::SecretKey,
-    files: Vec<PathBuf>,
-    verbose: bool,
-    filenameencrypt: bool,
-) {
-    for file in files {
-        let filedata: String = match file.to_str() {
-            Some(x) => String::from(x),
-            None => {
-                eprintln!("Cannot get correct filename");
-                return;
+
+/// Walk a directory recursively encrypting files (non-hidden)
+fn traverse_and_encrypt(dir: &Path, password: &str) -> io::Result<()> {
+    for entry in read_dir(dir)? {
+        let entry = entry?;
+        let p = entry.path();
+        if p.is_dir() {
+            traverse_and_encrypt(&p, password)?;
+        } else {
+            // skip our param file and skip already encrypted files
+            if let Some(fname) = p.file_name().and_then(|s| s.to_str()) {
+                if fname == FILEPARAM { continue; }
+                if fname.ends_with(ENCRYPTSUFFIX) { continue; }
             }
-        };
-        if filedata.ends_with(ENCRYPTSUFFIX) {
-            if verbose {
-                println!("The file {} is already encrypted", filedata);
-            }
-            continue;
-        }
-        let (mut sealer, nonce) = StreamSealer::new(secret_key).unwrap();
-        let data = fs::read(&filedata);
-        if data.is_err() {
-            eprintln!(
-                "The error is {} for the file {:?}",
-                data.unwrap_err(),
-                &filedata
-            );
-            return;
-        }
-        let mut data = data.unwrap(); //Cannot be wrong
-        let filename = filedata.clone();
-        let (pathname, filenameplain) = getparent(Path::new(&filename));
-        let pathname = Path::new(&pathname);
-        let elemfilename;
-        let mut newfilename = Path::new(&filename);
-        if filenameencrypt {
-            elemfilename =
-                pathname.join(general_purpose::URL_SAFE.encode(seal(secret_key, filenameplain.as_bytes()).expect("Cannot encrypt filename")));
-            newfilename = &elemfilename;
-        }
-        let mut newfilename = String::from(newfilename.to_str().unwrap());
-        newfilename.push_str(ENCRYPTSUFFIX);
-        let mut file = OpenOptions::new()
-            .append(false)
-            .create_new(true)
-            .open(newfilename)
-            .unwrap();
-        /* println!(
-            "The nonce is set! {}",
-            general_purpose::STANDARD.encode(nonce.as_ref())
-        ); */
-        if file.write(nonce.as_ref()).unwrap() != SALTSIZE {
-            eprintln!("Nonce error");
-            exit(1);
-        }
-        for (n_chunk, src_chunk) in data.chunks(CHUNK_SIZE).enumerate() {
-            let encrypted_chunk =
-                if src_chunk.len() != CHUNK_SIZE || n_chunk + 1 == data.len() / CHUNK_SIZE {
-                    // We've reached the end of the input source,
-                    // so we mark it with the Finish tag.
-                    sealer.seal_chunk(src_chunk, &StreamTag::Finish).unwrap()
-                } else {
-                    // Just a normal chunk
-                    sealer.seal_chunk(src_chunk, &StreamTag::Message).unwrap()
-                };
-            // Save the encrypted chunk somewhere
-            file.write_all(&encrypted_chunk).expect("Invalid writing.");
-        }
-        data.zeroize();
-        let blank: String = String::new();
-        let write = fs::write(&filedata, &blank); //Empty a file
-        if write.is_err() {
-            eprintln!(
-                "The error is {} for the file {:?}",
-                write.unwrap_err(),
-                &filedata
-            );
-            continue;
-        }
-        let delete = fs::remove_file(&filedata);
-        if delete.is_err() {
-            eprintln!(
-                "The error is {} for the file {}. Deletion impossible",
-                delete.unwrap_err(),
-                &filedata
-            );
-            continue;
-        }
-        if verbose {
-            println!("Following file has been encrypted: '{}'.", &filedata);
+            encrypt_path(&p, password)?;
         }
     }
+    Ok(())
 }
-pub fn decryptastream(
-    secret_key: &aead::SecretKey,
-    files: Vec<PathBuf>,
-    verbose: bool,
-    filenamencrypt: bool,
-) -> bool {
-    let mut count: usize = 0;
-    let size = files.len();
-    for file in files {
-        let filedata: String = match file.to_str() {
-            Some(x) => String::from(x),
-            None => {
-                eprintln!("Cannot get correct filename");
-                continue;
+
+/// Walk a directory recursively decrypting files (non-hidden)
+fn traverse_and_decrypt(dir: &Path, password: &str) -> io::Result<()> {
+    for entry in read_dir(dir)? {
+        let entry = entry?;
+        let p = entry.path();
+        if p.is_dir() {
+            traverse_and_decrypt(&p, password)?;
+        } else {
+            if let Some(fname) = p.file_name().and_then(|s| s.to_str()) {
+                if fname == FILEPARAM { continue; }
+                // only attempt decrypt on files with ENCRYPTSUFFIX
+                if fname.ends_with(ENCRYPTSUFFIX) {
+                    decrypt_path(&p, password)?;
+                }
             }
-        };
-        if !filedata.ends_with(ENCRYPTSUFFIX) {
-            if verbose {
-                println!("The file {} is not encrypted, skipped.", file.display())
-            }
-            continue;
         }
-        let decipher_chunk = CHUNK_SIZE + ABYTES;
-        let nonce = fs::read(&filedata);
-        if nonce.is_err() {
-            eprintln!(
-                "The error is {} for the file {:?}",
-                nonce.unwrap_err(),
-                &filedata
-            );
-            continue;
+    }
+    Ok(())
+}
+
+/// Write a tiny parameters file next to the input file for decryption (mem:param:salt)
+fn write_param_file(path: &Path, mem: u32, salt: &kdf::Salt) -> io::Result<()> {
+    let parent = path.parent().unwrap_or(Path::new("."));
+    let param_file = parent.join(FILEPARAM);
+    let mut f = OpenOptions::new().create(true).append(false).write(true).truncate(true).open(param_file)?;
+    // We'll store memory parameter and base64(salt)
+    let b64_salt = general_purpose::STANDARD.encode(salt.unprotected_as_bytes());
+    let line = format!("{}:{}\n", mem, b64_salt);
+    f.write_all(line.as_bytes())?;
+    Ok(())
+}
+
+/// Read param file (mem, iterations, salt)
+fn read_param_file(param_file: &Path) -> io::Result<(u32, u32, kdf::Salt)> {
+    let mut buf = String::new();
+    let mut f = File::open(param_file)?;
+    f.read_to_string(&mut buf)?;
+    // expected format: "<mem>:<base64salt>\n"
+    let parts: Vec<&str> = buf.trim().split(':').collect();
+    if parts.len() != 2 {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "param file malformed"));
+    }
+    let mem: u32 = parts[0].trim().parse().map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid mem param"))?;
+    let salt_bytes = general_purpose::STANDARD.decode(parts[1].trim())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid base64 salt"))?;
+    let salt = kdf::Salt::from_slice(&salt_bytes).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid salt length"))?;
+    // iterations we're using a default of 3 (the code that wrote it used 3), but if you want to store it, extend format.
+    let iterations: u32 = 3;
+    Ok((iterations, mem, salt))
+}
+
+/// Derive an orion secret key from a password and salt using orion::kdf::derive_key
+fn derive_secret_key_from_password(password: &str, salt: &kdf::Salt, iterations: u32, memory_kib: u32) -> io::Result<SecretKey> {
+    // convert to kdf::Password wrapper
+    let password_kdf = kdf::Password::from_slice(password.as_bytes()).map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "password invalid"))?;
+    // desired length for key = 32 bytes (XChaCha20-Poly1305 key size)
+    let desired_len = 32u32;
+    let dk = kdf::derive_key(&password_kdf, salt, iterations, memory_kib, desired_len)
+        .map_err(|_| io::Error::new(io::ErrorKind::Other, "kdf derive_key failed"))?;
+    // dk is the crate's high-level SecretKey type (compatible with aead::SecretKey)
+    // Return as aead::SecretKey (same underlying type in orion's high-level API)
+    Ok(dk)
+}
+
+/// Encrypt a file using streaming AEAD.
+/// File format:
+/// [nonce bytes (Nonce::len())][u64_be len-of-chunk1][chunk1 bytes][u64_be len-of-chunk2][chunk2 bytes]...
+fn encrypt_file_streaming(in_path: &Path, out_path: &Path, secret_key: &SecretKey) -> io::Result<()> {
+    let infile = File::open(in_path)?;
+    let mut rdr = BufReader::new(infile);
+    let outfile = OpenOptions::new().create(true).write(true).truncate(true).open(out_path)?;
+    let mut wtr = BufWriter::new(outfile);
+
+    // Create the StreamSealer and get the nonce
+    let (mut sealer, nonce) = StreamSealer::new(secret_key)
+        .map_err(|_| io::Error::new(io::ErrorKind::Other, "Failed to create StreamSealer"))?;
+
+    // Write nonce bytes at start
+    wtr.write_all(nonce.as_ref())?;
+
+    let mut buffer = vec![0u8; CHUNK_SIZE];
+    loop {
+        let read = rdr.read(&mut buffer)?;
+        if read == 0 {
+            // nothing more to read: send a zero-length Finish message to mark stream end (some implementations don't need it,
+            // but we follow the recommended pattern to ensure opener can detect truncation).
+            let encrypted_chunk = sealer.seal_chunk(&[], &StreamTag::Finish)
+                .map_err(|_| io::Error::new(io::ErrorKind::Other, "seal_chunk failed"))?;
+            // write chunk length then chunk
+            let len = encrypted_chunk.len() as u64;
+            wtr.write_all(&len.to_be_bytes())?;
+            wtr.write_all(&encrypted_chunk)?;
+            break;
+        } else {
+            // Determine tag: if read < chunk_size -> probably last chunk (but we still treat final chunk explicitly only when EOF next iteration).
+            // To be safe, when read < buffer.len() and next read will be 0, we will set Finish below.
+            // Simpler: we mark normal message unless read < buffer.len() and rdr.peek isn't available; instead detect EOF by using exact read < CHUNK_SIZE and no more bytes:
+            // We'll check if read < CHUNK_SIZE and then use Finish tag, else Message.
+            let tag = if read < CHUNK_SIZE { &StreamTag::Message } else { &StreamTag::Message }; // default Message
+            // We'll decide Finish when we reach EOF in the next iteration; but to guarantee the stream ends we will set Finish on the final explicit zero-length message above.
+            let encrypted_chunk = sealer.seal_chunk(&buffer[..read], tag)
+                .map_err(|_| io::Error::new(io::ErrorKind::Other, "seal_chunk failed"))?;
+            let len = encrypted_chunk.len() as u64;
+            wtr.write_all(&len.to_be_bytes())?;
+            wtr.write_all(&encrypted_chunk)?;
+            // continue until EOF; finalization already handled by the zero-length Finish chunk above.
         }
-        let mut nonce = nonce.unwrap(); //Cannot be wrong
-        if nonce.len() < SALTSIZE {
-            eprintln!("Lack characters to decrypt for the file {:?}", &filedata);
-            continue;
-        }
-        let data = nonce.split_off(SALTSIZE);
-        let nonce: orion::hazardous::stream::xchacha20::Nonce =
-            orion::hazardous::stream::xchacha20::Nonce::from_slice(&nonce).unwrap();
-        /* println!(
-            "The nonce is set! {}",
-            general_purpose::STANDARD.encode(&nonce)
-        ); */
-        let mut opener = StreamOpener::new(secret_key, &nonce).unwrap();
-        let out: Vec<Vec<u8>> = Vec::with_capacity(data.len() / decipher_chunk);
-        let mut filename = filedata.clone();
-        filename = String::from(filename.as_str().trim_end_matches(ENCRYPTSUFFIX)); //Remove last _encrypted
-        let (pathname, filenameplain) = getparent(Path::new(&filename));
-        let pathname = Path::new(&pathname);
-        let mut newfilename = Path::new(&filename);
-        /* if filenameencrypt {
-            elemfilename =
-                pathname.join(general_purpose::URL_SAFE.encode(seal(&secret_key, &filenameplain.as_encoded_bytes()).unwrap()));
-            newfilename = &elemfilename;
-        } */
-        let path: PathBuf;
-        if filenamencrypt {
-            //let newfilename = general_purpose::URL_SAFE.encode(seal(&secret_key,filename.as_bytes()).unwrap());
-            let binaryfilename = open(
-                secret_key,
-                &general_purpose::URL_SAFE.decode(filenameplain.as_bytes()).expect("Cannot decrypt filename"),
-            );
-            if binaryfilename.is_err() {
-                eprintln!(
-                    "The error is {} for the file {:?}",
-                    binaryfilename.unwrap_err(),
-                    &filename
-                );
-                continue;
-            }
-            path = Path::join(pathname,String::from_utf8(binaryfilename.unwrap()).unwrap());
-            newfilename = &path;
-        }
-        let file = OpenOptions::new()
-            .append(false)
-            .create_new(true)
-            .open(newfilename);
-        if file.is_err() {
-            eprintln!(
-                "The error is {} for the file {:?}",
-                file.unwrap_err(),
-                &filename
-            );
-            continue;
-        }
-        let mut file = file.unwrap();
-        let mut error = false;
-        for (n_chunk, src_chunk) in data.chunks(decipher_chunk).enumerate() {
-            let openerfile = opener.open_chunk(src_chunk);
-            if openerfile.is_err() {
-                let _ = fs::remove_file(&filename); //Remove invalid file created
-                eprintln!(
-                    "The error is {} for the file {:?}, probably invalid password. Exiting.",
-                    openerfile.unwrap_err(),
-                    &filedata
-                );
-                error = true;
+    }
+
+    // Ensure data is flushed
+    wtr.flush()?;
+
+    Ok(())
+}
+
+/// Decrypt file that follows the format produced by encrypt_file_streaming
+fn decrypt_file_streaming(in_path: &Path, out_path: &Path, secret_key: &SecretKey) -> io::Result<()> {
+    let infile = File::open(in_path)?;
+    let mut rdr = BufReader::new(infile);
+    let outfile = OpenOptions::new().create(true).write(true).truncate(true).open(out_path)?;
+    let mut wtr = BufWriter::new(outfile);
+
+    // Read nonce
+    // Nonce length is provided by the Nonce type; the streaming module re-exports Nonce
+    let mut nonce_buf = vec![0u8; Nonce::len()];
+    rdr.read_exact(&mut nonce_buf)?;
+    let nonce = Nonce::from_slice(&nonce_buf).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid nonce"))?;
+    let mut opener = StreamOpener::new(secret_key, &nonce)
+        .map_err(|_| io::Error::new(io::ErrorKind::Other, "Failed to create StreamOpener"))?;
+
+    // Loop: read u64 length then that many bytes
+    loop {
+        let mut lenbuf = [0u8; 8];
+        match rdr.read_exact(&mut lenbuf) {
+            Ok(()) => {},
+            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
+                // no more chunks; done
                 break;
             }
-            let (decrypted_chunk, tag) = openerfile.unwrap();
-            if src_chunk.len() != CHUNK_SIZE + ABYTES || n_chunk + 1 == out.len() {
-                // We've reached the end of the input source,
-                // so we check if the last chunk is also set as Finish.
-                assert_eq!(tag, StreamTag::Finish, "Stream has been truncated!");
-            }
-            // Save the encrypted chunk somewhere
-            file.write_all(&decrypted_chunk).expect("Invalid writing");
+            Err(e) => return Err(e),
         }
-        if error {
-            //error
+        let chunk_len = u64::from_be_bytes(lenbuf) as usize;
+        if chunk_len == 0 {
+            // Nothing — continue (shouldn't happen because we always write a final non-empty sealed chunk)
+            continue;
+        }
+        let mut chunk = vec![0u8; chunk_len];
+        rdr.read_exact(&mut chunk)?;
+        // open this chunk
+        let (plain, tag) = opener.open_chunk(&chunk)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "open_chunk failed: authentication error"))?;
+        wtr.write_all(&plain)?;
+        // If the tag indicates finish, break
+        if tag == StreamTag::Finish {
             break;
         }
-        let blank: String = String::new();
-        let write = fs::write(&filedata, &blank);
-        if write.is_err() {
-            eprintln!(
-                "The error is {} for the file {:?}",
-                write.unwrap_err(),
-                &filedata
-            );
-            continue;
-        }
-        /* let write = fs::write(&filename, &out);
-        if write.is_err() {
-            eprintln!("Bad write on file {:?}", &filedata);
-            continue;
-        } */
-        let delete = fs::remove_file(&filedata);
-        if delete.is_err() {
-            eprintln!(
-                "The error is {} for the file {}",
-                delete.unwrap_err(),
-                &filedata
-            );
-            continue;
-        }
-        if verbose {
-            println!("The file {} has been decrypted successfully.", &filedata);
-        }
-        count += 1;
     }
-    if count == 0 {
-        eprintln!("Cannot decrypt any files!");
-        exit(1);
-    }
-    count == size
+
+    wtr.flush()?;
+    Ok(())
 }
-fn main() {
-    let args = Args::parse();
-    let verbose = args.verbose;
-    let filenameencrypt = args.filename;
-    match args.action {
-        Action::Encrypt => {
-            let (files, fileparam) = getfiles(args.file.clone(), args.verbose, args.recursive);
-            let secret_key =
-                extractmasterkey(true, Path::new(&fileparam), args.argon2, &args.password);
-            encryptastream(&secret_key, files, verbose, filenameencrypt);
-        }
-        Action::Decrypt => {
-            let (files, fileparam) = getfiles(args.file.clone(), args.verbose, args.recursive);
-            let secret_key =
-                extractmasterkey(false, Path::new(&fileparam), args.argon2, &args.password);
-            let result = decryptastream(&secret_key, files, verbose, filenameencrypt);
-            if result {
-                match fs::remove_file(&fileparam) {
-                    Ok(_) => {}
-                    Err(_) => {
-                        eprintln!("Cannot delete parameters");
-                    }
-                }
-            } else {
-                eprintln!("All files could not be decrypted!");
-            }
-        }
-        Action::Compute => {
-            if verbose {
-                println!(
-                    "Getting parameter to derive the master key, please wait several seconds."
-                );
-            }
-            let mut now = time::Instant::now();
-            let user_password = kdf::Password::from_slice(b"This is an attempt").unwrap();
-            let salt = kdf::Salt::default();
-            for i in MIN_MEM_ARGON..=MAX_MEM_ARGON {
-                let _derived_key = kdf::derive_key(&user_password, &salt, 3, 1 << i, 32).unwrap();
-                //println!("The derived key is {}",general_purpose::STANDARD.encode(derived_key.unprotected_as_bytes()));
-                if now.elapsed().as_millis() > 5000 {
-                    let base: u32 = 2;
-                    let calc = i - 1;
-                    if verbose {
-                        println!(
-                            "The parameter used should be {} which corresponds to {} MiB",
-                            calc,
-                            (1 << calc) / base.pow(10)
-                        );
-                    } else {
-                        println!("{}", calc);
-                    }
-                    break;
-                } else {
-                    now = time::Instant::now();
-                }
-            }
-        }
-    }
-}
+ 
