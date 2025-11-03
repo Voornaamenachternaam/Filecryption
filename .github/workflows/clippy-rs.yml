@@ -19,6 +19,6 @@ jobs:
                   toolchain: stable
                   components: clippy
                   override: true
-            - uses: actions-rs-plus/clippy-check@v2.3.0
+            - uses: clechasseur/rs-clippy-check@v5.0.1
               with:
                   args: --all-features
