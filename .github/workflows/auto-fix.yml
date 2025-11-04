@@ -1,10 +1,13 @@
 name: try-auto-fix
-on:
-  workflow_dispatch:
-  schedule:
-    - cron: '0 3 * * *'   # weekly run (adjust)
+
+on: 
+  push:
+    branches: [ "main" ]
   pull_request:
-    types: [opened, synchronize]
+    branches: [ "main" ]
+  workflow_dispatch: {}  # Allows manual trigger from GitHub Actions UI
+  schedule:
+    - cron: "0 2 * * *"
 
 jobs:
   try-fix:
@@ -17,14 +20,14 @@ jobs:
           fetch-depth: 0
 
       - name: Install Rust toolchain
-        uses: actions-rs/toolchain@v1
+        uses: actions-rs/toolchain@v1.0.6
         with:
           toolchain: stable
           components: clippy,rustfmt
           override: true
 
       - name: Cache cargo registry & target
-        uses: actions/cache@v4
+        uses: actions/cache@v4.3.0
         with:
           path: |
             ~/.cargo/registry
