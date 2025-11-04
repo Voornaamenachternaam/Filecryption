@@ -15,7 +15,7 @@ use orion::aead::streaming::*;
 use orion::kdf;
 use rpassword::read_password;
 
-use zeroize::Zeroize; // kept if you later zeroize local buffers; can be removed if unused
+// kept if you later zeroize local buffers; can be removed if unused
 
 /// File that stores serialized params (salt + memory parameter)
 const FILEPARAM: &str = ".parameters.txt";
@@ -130,8 +130,7 @@ fn prompt_or_use(provided: Option<String>, for_encrypt: bool) -> String {
 /// Top-level path encrypt helper
 fn encrypt_path(path: &Path, password: &str) -> io::Result<()> {
     if path.is_dir() {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
+        return Err(io::Error::other(
             "encrypt_path: expected file, got directory",
         ));
     }
@@ -159,8 +158,7 @@ fn encrypt_path(path: &Path, password: &str) -> io::Result<()> {
 /// Top-level path decrypt helper
 fn decrypt_path(path: &Path, password: &str) -> io::Result<()> {
     if path.is_dir() {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
+        return Err(io::Error::other(
             "decrypt_path: expected file, got directory",
         ));
     }
@@ -218,15 +216,13 @@ fn traverse_and_decrypt(dir: &Path, password: &str) -> io::Result<()> {
         let p = entry.path();
         if p.is_dir() {
             traverse_and_decrypt(&p, password)?;
-        } else {
-            if let Some(fname) = p.file_name().and_then(|s| s.to_str()) {
-                if fname == FILEPARAM {
-                    continue;
-                }
-                // only attempt decrypt on files with ENCRYPTSUFFIX
-                if fname.ends_with(ENCRYPTSUFFIX) {
-                    decrypt_path(&p, password)?;
-                }
+        } else if let Some(fname) = p.file_name().and_then(|s| s.to_str()) {
+            if fname == FILEPARAM {
+                continue;
+            }
+            // only attempt decrypt on files with ENCRYPTSUFFIX
+            if fname.ends_with(ENCRYPTSUFFIX) {
+                decrypt_path(&p, password)?;
             }
         }
     }
@@ -290,7 +286,7 @@ fn derive_secret_key_from_password(
     // desired length for key = 32 bytes (XChaCha20-Poly1305 key size)
     let desired_len = 32u32;
     let dk = kdf::derive_key(&password_kdf, salt, iterations, memory_kib, desired_len)
-        .map_err(|_| io::Error::new(io::ErrorKind::Other, "kdf derive_key failed"))?;
+        .map_err(|_| io::Error::other("kdf derive_key failed"))?;
     Ok(dk)
 }
 
@@ -313,7 +309,7 @@ fn encrypt_file_streaming(
 
     // Create the StreamSealer and get the nonce
     let (mut sealer, nonce) = StreamSealer::new(secret_key)
-        .map_err(|_| io::Error::new(io::ErrorKind::Other, "Failed to create StreamSealer"))?;
+        .map_err(|_| io::Error::other("Failed to create StreamSealer"))?;
 
     // Write nonce bytes at start
     wtr.write_all(nonce.as_ref())?;
@@ -325,7 +321,7 @@ fn encrypt_file_streaming(
             // nothing more to read: send a zero-length Finish message to mark stream end
             let encrypted_chunk = sealer
                 .seal_chunk(&[], &StreamTag::Finish)
-                .map_err(|_| io::Error::new(io::ErrorKind::Other, "seal_chunk failed"))?;
+                .map_err(|_| io::Error::other("seal_chunk failed"))?;
             let len = encrypted_chunk.len() as u64;
             wtr.write_all(&len.to_be_bytes())?;
             wtr.write_all(&encrypted_chunk)?;
@@ -334,7 +330,7 @@ fn encrypt_file_streaming(
             // Use message tag for each chunk; we rely on final zero-length Finish chunk above
             let encrypted_chunk = sealer
                 .seal_chunk(&buffer[..read], &StreamTag::Message)
-                .map_err(|_| io::Error::new(io::ErrorKind::Other, "seal_chunk failed"))?;
+                .map_err(|_| io::Error::other("seal_chunk failed"))?;
             let len = encrypted_chunk.len() as u64;
             wtr.write_all(&len.to_be_bytes())?;
             wtr.write_all(&encrypted_chunk)?;
@@ -367,7 +363,7 @@ fn decrypt_file_streaming(
     let nonce = Nonce::from_slice(&nonce_buf)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid nonce"))?;
     let mut opener = StreamOpener::new(secret_key, &nonce)
-        .map_err(|_| io::Error::new(io::ErrorKind::Other, "Failed to create StreamOpener"))?;
+        .map_err(|_| io::Error::other("Failed to create StreamOpener"))?;
 
     // Loop: read u64 length then that many bytes
     loop {
