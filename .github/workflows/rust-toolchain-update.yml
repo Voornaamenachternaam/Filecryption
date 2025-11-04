@@ -52,7 +52,7 @@ jobs:
       - name: Commit & create PR if toolchain changed
         if: env.RUST_TOOLCHAIN_UPDATED == 'true'
         id: create_pr
-        uses: peter-evans/create-pull-request@v7.0.8
+        uses: peter-evans/create-pull-request@v7
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           commit-message: "chore(ci): update Rust toolchain to latest stable"

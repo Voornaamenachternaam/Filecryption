@@ -53,7 +53,7 @@ jobs:
           cargo test --workspace
 
       - name: Create branch & PR if there are changes
-        uses: peter-evans/create-pull-request@v5
+        uses: peter-evans/create-pull-request@v7
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           commit-message: "[auto-fix] apply cargo fix / clippy fixes"
