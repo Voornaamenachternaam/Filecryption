@@ -1,0 +1,66 @@
+name: try-auto-fix
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 3 * * *'   # weekly run (adjust)
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  try-fix:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write    # needed to push branch / create PR (GITHUB_TOKEN)
+    steps:
+      - uses: actions/checkout@v5.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          components: clippy,rustfmt
+          override: true
+
+      - name: Cache cargo registry & target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run initial build & tests
+        run: |
+          cargo test --workspace
+
+      - name: Try cargo fix (compiler fixes)
+        run: |
+          cargo fix --workspace --allow-dirty --allow-staged || true
+
+      - name: Try clippy auto-fixes
+        run: |
+          cargo clippy --all-targets --all-features --workspace --fix --allow-dirty --allow-staged || true
+
+      - name: Run rustfmt
+        run: |
+          cargo fmt --all
+
+      - name: Re-run tests
+        run: |
+          cargo test --workspace
+
+      - name: Create branch & PR if there are changes
+        uses: peter-evans/create-pull-request@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "[auto-fix] apply cargo fix / clippy fixes"
+          branch: auto-fix/${{ github.run_id }}
+          title: "[auto-fix] Attempt fixes from cargo/clippy"
+          body: |
+            This PR contains automatic fixes from cargo fix / clippy --fix / rustfmt applied by CI.
+            Run tests and review before merging.
+          labels: automated, auto-fix
+
