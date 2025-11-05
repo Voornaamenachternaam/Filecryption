@@ -25,36 +25,34 @@ jobs:
         uses: actions/checkout@v5.0.0
 
       - name: Install Rust toolchain (1.91.0) and Clippy
-        uses: actions-rs/toolchain@v1.0.7
+        # per your request: dtolnay/rust-toolchain@master, explicit toolchain input
+        uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.91.0
           components: clippy
-          override: true
 
-      # Install clippy-sarif and sarif-fmt into $HOME/.cargo/bin
       - name: Install SARIF converters (clippy-sarif, sarif-fmt)
         run: |
-          # ensure cargo is available (toolchain step installs rustup/cargo)
-          /home/runner/.cargo/bin/cargo install --force clippy-sarif
-          /home/runner/.cargo/bin/cargo install --force sarif-fmt
-          # make sure the runner PATH includes the cargo bin for subsequent steps
+          # Install clippy-sarif and sarif-fmt so we can convert Clippy JSON -> SARIF
+          # Use --force to ensure fresh install on runners that may have them already.
+          cargo install --force clippy-sarif
+          cargo install --force sarif-fmt
+          # Ensure installed binaries are on PATH for later steps
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
         shell: bash
 
-      # Run cargo clippy and convert to SARIF via shell pipeline (pipes interpreted by shell)
       - name: Run Clippy and produce SARIF
         run: |
-          # use the specific toolchain implicitly installed above (override:true) -> -> rustup override applied
-          # Run clippy (JSON), pipe into clippy-sarif, tee to file and format for readable logs
+          # Run clippy (JSON output), convert to SARIF, save to file and pretty-print for logs
           cargo clippy --all-features --message-format=json \
             | clippy-sarif \
             | tee rust-clippy-results.sarif \
             | sarif-fmt
         shell: bash
 
-      # Validate SARIF is valid JSON before upload (fast fail with helpful message)
       - name: Validate SARIF JSON
         run: |
+          # Quick validation to fail fast if SARIF is truncated/invalid
           python -m json.tool rust-clippy-results.sarif > /dev/null
         shell: bash
 
