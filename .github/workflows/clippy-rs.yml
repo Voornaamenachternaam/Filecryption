@@ -8,7 +8,7 @@ permissions:
   statuses: write
   issues: write
 
-on: 
+on:
   push:
     branches: [ "main" ]
   pull_request:
@@ -18,20 +18,48 @@ on:
     - cron: "0 2 * * *"
 
 jobs:
-    clippy_check:
-        runs-on: ubuntu-latest
-        steps:
-            - uses: actions/checkout@v5.0.0
-            - uses: actions-rs/toolchain@v1.0.7
-              with:
-                  toolchain: stable
-                  components: clippy
-                  override: true
-            - uses: clechasseur/rs-clippy-check@v5.0.1
-              with:
-                  args: --all-features --message-format=json | clippy-sarif | tee rust-clippy-results.sarif | sarif-fmt
-            - name: Upload analysis results to GitHub
-              uses: github/codeql-action/upload-sarif@v4
-              with:
-                sarif_file: rust-clippy-results.sarif
-                wait-for-processing: true
+  clippy_check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5.0.0
+
+      - name: Install Rust toolchain (1.91.0) and Clippy
+        uses: actions-rs/toolchain@v1.0.7
+        with:
+          toolchain: 1.91.0
+          components: clippy
+          override: true
+
+      # Install clippy-sarif and sarif-fmt into $HOME/.cargo/bin
+      - name: Install SARIF converters (clippy-sarif, sarif-fmt)
+        run: |
+          # ensure cargo is available (toolchain step installs rustup/cargo)
+          /home/runner/.cargo/bin/cargo install --force clippy-sarif
+          /home/runner/.cargo/bin/cargo install --force sarif-fmt
+          # make sure the runner PATH includes the cargo bin for subsequent steps
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+        shell: bash
+
+      # Run cargo clippy and convert to SARIF via shell pipeline (pipes interpreted by shell)
+      - name: Run Clippy and produce SARIF
+        run: |
+          # use the specific toolchain implicitly installed above (override:true) -> -> rustup override applied
+          # Run clippy (JSON), pipe into clippy-sarif, tee to file and format for readable logs
+          cargo clippy --all-features --message-format=json \
+            | clippy-sarif \
+            | tee rust-clippy-results.sarif \
+            | sarif-fmt
+        shell: bash
+
+      # Validate SARIF is valid JSON before upload (fast fail with helpful message)
+      - name: Validate SARIF JSON
+        run: |
+          python -m json.tool rust-clippy-results.sarif > /dev/null
+        shell: bash
+
+      - name: Upload analysis results to GitHub
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: rust-clippy-results.sarif
+          wait-for-processing: true
