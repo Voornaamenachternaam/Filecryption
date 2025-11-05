@@ -1,5 +1,13 @@
 name: rust-rs
 
+permissions:
+  contents: write
+  checks: write
+  pull-requests: write
+  security-events: write
+  statuses: write
+  issues: write
+
 on: 
   push:
     branches: [ "main" ]
@@ -21,4 +29,9 @@ jobs:
                   override: true
             - uses: clechasseur/rs-clippy-check@v5.0.1
               with:
-                  args: --all-features
+                  args: --all-features --message-format=json | clippy-sarif | tee rust-clippy-results.sarif | sarif-fmt
+            - name: Upload analysis results to GitHub
+              uses: github/codeql-action/upload-sarif@v4
+              with:
+                sarif_file: rust-clippy-results.sarif
+                wait-for-processing: true
