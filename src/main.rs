@@ -19,8 +19,6 @@ use rpassword::read_password;
 
 /// File that stores serialized params (salt + memory parameter)
 const FILEPARAM: &str = ".parameters.txt";
-/// Salt length used for other contexts (not required for streaming nonce)
-const SALTSIZE: usize = 16;
 /// XChaCha20 nonce size (Orion uses 24 bytes for XChaCha)
 const NONCE_LEN: usize = 24;
 /// Suffix appended on encrypted files (for safety)
