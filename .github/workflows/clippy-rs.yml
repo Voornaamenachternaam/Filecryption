@@ -13,7 +13,7 @@ on:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
-  workflow_dispatch: {}  # Manual trigger
+  workflow_dispatch: {}
   schedule:
     - cron: "0 2 * * *"
 
@@ -26,31 +26,46 @@ jobs:
         uses: actions/checkout@v5.0.0
 
       # 2️⃣ Install Rust toolchain (1.91.0) and Clippy
-      - name: Install Rust toolchain (1.91.0) and Clippy
+      - name: Install Rust toolchain and Clippy
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.91.0
           components: clippy
 
       # 3️⃣ Install SARIF converters
-      - name: Install SARIF converters (clippy-sarif, sarif-fmt)
+      - name: Install SARIF converters
         run: |
           cargo install --force clippy-sarif
           cargo install --force sarif-fmt
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
         shell: bash
 
-      # 4️⃣ Run Clippy and produce SARIF safely
-      - name: Run Clippy and produce SARIF
+      # 4️⃣ Run Clippy with fixes, produce SARIF safely
+      - name: Run Clippy and produce SARIF safely
+        id: clippy_run
         run: |
-          # Run Clippy with auto-fixes, allow dirty workspace to avoid exit 101
-          cargo clippy --fix --all-features --message-format=json \
-            | clippy-sarif \
-            | tee rust-clippy-results.sarif \
-            | sarif-fmt
+          TMP_JSON=$(mktemp)
+          TMP_SARIF=$(mktemp)
+
+          # Run Clippy with fixes; JSON output to temp
+          cargo clippy --fix --all-features --message-format=json > "$TMP_JSON"
+
+          # Convert JSON -> SARIF
+          clippy-sarif < "$TMP_JSON" | tee "$TMP_SARIF" | sarif-fmt
+
+          # Copy SARIF to repo root for upload
+          cp "$TMP_SARIF" rust-clippy-results.sarif
+
+          # Check if any source files were modified by cargo fix
+          # Ignore SARIF and temp files
+          if git diff --name-only | grep -vE 'rust-clippy-results\.sarif|\.tmp' >/dev/null; then
+            echo "fixes_applied=true" >> $GITHUB_OUTPUT
+          else
+            echo "fixes_applied=false" >> $GITHUB_OUTPUT
+          fi
         shell: bash
 
-      # 5️⃣ Validate SARIF JSON quickly
+      # 5️⃣ Validate SARIF JSON
       - name: Validate SARIF JSON
         run: |
           python -m json.tool rust-clippy-results.sarif > /dev/null
@@ -62,3 +77,40 @@ jobs:
         with:
           sarif_file: rust-clippy-results.sarif
           wait-for-processing: true
+
+      # 7️⃣ Create a Pull Request with fixes (only if source files changed)
+      - name: Commit fixes and create Pull Request
+        if: steps.clippy_run.outputs.fixes_applied == 'true'
+        run: |
+          # Configure git for CI
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Create a unique branch for this run
+          BRANCH="clippy-fixes-${GITHUB_RUN_ID}"
+          git checkout -b "$BRANCH"
+
+          # Stage only source files (ignore SARIF/log files)
+          git add $(git diff --name-only | grep -vE 'rust-clippy-results\.sarif|\.tmp')
+
+          # Commit changes
+          git commit -m "Apply Clippy auto-fixes"
+
+          # Push branch to remote
+          git push origin "$BRANCH"
+
+          # Set output for PR step
+          echo "pr_branch=$BRANCH" >> $GITHUB_OUTPUT
+        id: commit_fixes
+        shell: bash
+
+      - name: Create Pull Request
+        if: steps.clippy_run.outputs.fixes_applied == 'true'
+        uses: step-security/create-or-update-pull-request-action@v1.10.2
+        with:
+          title: "Apply Clippy auto-fixes"
+          body: |
+            This PR applies automatic Clippy fixes to the codebase.
+            Clippy warnings have been resolved where possible.
+          branch: ${{ steps.commit_fixes.outputs.pr_branch }}
+          base: "main"
