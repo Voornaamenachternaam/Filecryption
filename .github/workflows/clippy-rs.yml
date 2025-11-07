@@ -44,7 +44,7 @@ jobs:
       - name: Run Clippy and produce SARIF
         run: |
           # Run Clippy with auto-fixes, allow dirty workspace to avoid exit 101
-          cargo clippy --fix --allow-dirty --all-features --message-format=json \
+          cargo clippy --fix --all-features --message-format=json \
             | clippy-sarif \
             | tee rust-clippy-results.sarif \
             | sarif-fmt
