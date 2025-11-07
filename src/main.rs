@@ -169,8 +169,12 @@ fn decrypt_path(path: &Path, password: &str) -> io::Result<()> {
     // decrypt streaming
     // output path: remove ENCRYPTSUFFIX if present
     let out_path = if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
-        if let Some(stripped) = name.strip_suffix(ENCRYPTSUFFIX) {
-            Path::new(stripped).to_path_buf()
+        if let Some(stripped) = name.strip_suffix(ENCRYPTSUFFIX) {            
+            let stripped_path = Path::new(stripped);
+            if stripped_path.parent() != Some(Path::new("")) {
+                return Err(io::Error::other("invalid output filename: contains path components"));
+            }
+            stripped_path.to_path_buf()
         } else {
             // append .decrypted if suffix not present
             Path::new(&format!("{}.decrypted", name)).to_path_buf()
