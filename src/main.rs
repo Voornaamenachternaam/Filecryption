@@ -170,8 +170,10 @@ fn decrypt_path(path: &Path, password: &str) -> io::Result<()> {
     // output path: remove ENCRYPTSUFFIX if present
     let out_path = if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
         if let Some(stripped) = name.strip_suffix(ENCRYPTSUFFIX) {            
+            use std::path::Component;
             let stripped_path = Path::new(stripped);
-            if stripped_path.parent() != Some(Path::new("")) {
+            let mut components = stripped_path.components();
+            if !(components.next().is_some_and(|c| matches!(c, Component::Normal(_))) && components.next().is_none()) {
                 return Err(io::Error::other("invalid output filename: contains path components"));
             }
             stripped_path.to_path_buf()
