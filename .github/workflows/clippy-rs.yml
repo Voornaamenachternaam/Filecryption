@@ -44,7 +44,7 @@ jobs:
       - name: Run Clippy and produce SARIF
         run: |
           # Run clippy (JSON output), convert to SARIF, save to file and pretty-print for logs
-          cargo clippy --all-features --message-format=json \
+          cargo clippy --fix --all-features --message-format=json \
             | clippy-sarif \
             | tee rust-clippy-results.sarif \
             | sarif-fmt
