@@ -28,7 +28,7 @@ jobs:
 
       # Use step-security/setup-crate to set up the Rust toolchain
       - name: Setup Rust toolchain (step-security/setup-crate)
-        uses: step-security/setup-crate@1.4.0
+        uses: step-security/setup-crate@v1.4.0
 
       - name: Ensure clippy component is available
         run: |
