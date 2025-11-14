@@ -25,11 +25,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5.0.0
 
-      # 2️⃣ Install Rust toolchain (1.91.0) and Clippy
+      # 2️⃣ Install Rust toolchain
       - name: Install Rust toolchain and Clippy
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.91.0
+          toolchain: stable
           components: clippy
 
       # 3️⃣ Install SARIF converters
