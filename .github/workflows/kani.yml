@@ -1,4 +1,6 @@
 name: Formal verification
+permissions:
+  contents: read
 
 # Run manually (workflow_dispatch)
 on:
