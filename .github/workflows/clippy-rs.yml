@@ -43,7 +43,6 @@ jobs:
           # token is used by many clippy actions for posting annotations/comments
           token: ${{ secrets.GITHUB_TOKEN }}
           # pass any args you want; we keep it conservative here
-          args: --all-features
         # intentionally do not fail the job here — the cargo clippy step below will be authoritative
         continue-on-error: false
 
