@@ -23,7 +23,7 @@ jobs:
     env:
       CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS: allow
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Install stable Rust
         run: |
