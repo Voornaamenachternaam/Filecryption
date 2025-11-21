@@ -21,7 +21,7 @@ jobs:
       sarif_files: ${{ steps.split.outputs.sarif_files }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5.0.0
+        uses: actions/checkout@v6
 
       - name: Run Codacy Analysis CLI
         uses: codacy/codacy-analysis-cli-action@master
@@ -79,7 +79,7 @@ jobs:
         sarif_file: ${{ fromJson(needs.codacy-security-scan.outputs.sarif_files) }}
     steps:
       - name: Checkout code (optional)
-        uses: actions/checkout@v5.0.0
+        uses: actions/checkout@v6
 
       - name: Download SARIF artifacts
         uses: actions/download-artifact@v5.0.0

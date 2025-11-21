@@ -13,7 +13,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5.0.0
+        uses: actions/checkout@v6
         continue-on-error: true
         
       - name: Install Rust 1.91 toolchain
