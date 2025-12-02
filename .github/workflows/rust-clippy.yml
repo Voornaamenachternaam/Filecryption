@@ -106,7 +106,7 @@ jobs:
       # Use step-security/clippy-action for a check-run / annotations
       # -------------------------
       - name: Run Clippy (annotations via step-security/clippy-action)
-        uses: auguwu/clippy-action@v1.4.0
+        uses: auguwu/clippy-action@master
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
