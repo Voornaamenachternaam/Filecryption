@@ -140,7 +140,7 @@ jobs:
 
       - name: Create Pull Request
         if: steps.clippy_run.outputs.fixes_applied == 'true' && steps.commit_fixes.outputs.pr_branch != ''
-        uses: step-security/create-or-update-pull-request-action@v1.10.2
+        uses: peter-evans/create-or-update-comment@v5.0.0
         with:
           title: "Apply Clippy auto-fixes"
           body: |
