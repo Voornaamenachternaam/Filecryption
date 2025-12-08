@@ -38,7 +38,7 @@ jobs:
       # 3️⃣ Run StepSecurity's Clippy action (annotates PRs / commits)
       #     (keeps the behaviour/annotation benefits of StepSecurity's action)
       - name: Run StepSecurity clippy-action (annotations)
-        uses: step-security/clippy-action@v1.4.0
+        uses: auguwu/clippy-action@master
         with:
           # token is used by many clippy actions for posting annotations/comments
           token: ${{ secrets.GITHUB_TOKEN }}
