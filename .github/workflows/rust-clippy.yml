@@ -89,7 +89,7 @@ jobs:
 
       - name: Create or update Pull Request for clippy fixes (StepSecurity)
         if: steps.commit-fixes.outputs.created_branch != ''
-        uses: peter-evans/create-pull-request@v7.0.9
+        uses: peter-evans/create-pull-request@v8
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
