@@ -1,8 +1,3 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
-//! Drop-in streaming-based main.rs for Filecryption
-//! Uses orion::aead::streaming::* (StreamSealer, StreamOpener, StreamTag)
-//! Compatible with orion 0.17.11 and Rust 1.91 (matches your CI logs).
-
 use std::fs::{File, OpenOptions, read_dir};
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
