@@ -10,8 +10,6 @@ use orion::aead::streaming::*;
 use orion::kdf;
 use rpassword::read_password;
 
-// kept if you later zeroize local buffers; can be removed if unused
-
 /// File that stores serialized params (salt + memory parameter)
 const FILEPARAM: &str = ".parameters.txt";
 /// XChaCha20 nonce size (Orion uses 24 bytes for XChaCha)
