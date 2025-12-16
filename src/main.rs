@@ -310,7 +310,6 @@ fn encrypt_file_streaming(
         .open(out_path)?;
     let mut wtr = BufWriter::new(outfile);
 
-    // Create the StreamSealer and get the nonce
     let (mut sealer, nonce) = StreamSealer::new(secret_key)
         .map_err(|_| io::Error::other("Failed to create StreamSealer"))?;
 
