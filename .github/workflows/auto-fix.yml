@@ -13,7 +13,11 @@ jobs:
   try-fix:
     runs-on: ubuntu-latest
     permissions:
-      contents: write    # needed to push branch / create PR (GITHUB_TOKEN)
+      contents: write
+      pull-requests: write
+      checks: write
+      security-events: write
+      actions: read
     steps:
       - uses: actions/checkout@v6.0.0
         with:
