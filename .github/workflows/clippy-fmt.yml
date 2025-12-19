@@ -1,0 +1,34 @@
+name: Lint-clippy-fmt
+
+permissions:
+  contents: write
+  checks: write
+  pull-requests: write
+  security-events: write
+  statuses: write
+  issues: write
+  actions: read 
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch: {}
+  schedule:
+    - cron: "0 5 * * *"
+
+jobs:
+  clippy-fmt:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6.0.1
+    - uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: stable
+        components: clippy, rustfmt
+    - uses: Swatinem/rust-cache@v2.8.2
+    - name: clippy
+      run: cargo clippy --workspace --all-targets --all-features -- -D warnings -A clippy::literal_string_with_formatting_args
+    - name: fmt
+      run: cargo fmt --all --check
