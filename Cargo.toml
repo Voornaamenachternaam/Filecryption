@@ -24,3 +24,9 @@ clap = { version = "^4.5.53", features = ["derive"] }
 zeroize = { version = "^1.8.2", features = ["zeroize_derive"] }
 #opaque-ke = "2.0"
 #rand = "^0.8.5"
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true
+codegen-units = 1
