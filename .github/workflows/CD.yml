@@ -81,7 +81,7 @@ jobs:
             ${{ runner.os }}-cargo-${{ matrix.target }}-
       - name: Install cross for cross-compilation
         if: matrix.use_cross == true
-        uses: taiki-e/install-action@v2.65.7
+        uses: taiki-e/install-action@v2.65.9
         with:
           tool: cross
 
