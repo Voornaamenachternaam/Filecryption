@@ -14,7 +14,7 @@ publish = false
 
 [dependencies]
 # rust-crypto = "^0.2"
-orion = { version = "^0.17.11", features = ["default"] }
+orion = { version = "^0.17.12", features = ["default"] }
 base64 = "^0.22.1"
 #crossterm = "^0.26.0"
 rpassword = "^7.4.0"
