@@ -33,7 +33,7 @@ jobs:
 
       - name: Format check (rustfmt)
         continue-on-error: true
-        run: cargo fmt -- --check
+        run: cargo fmt --check
 
       - name: Lint strictly (clippy)
         continue-on-error: true
@@ -86,4 +86,4 @@ jobs:
 
       - name: Run Cargo test suite
         continue-on-error: true
-        run: cargo test --all -- - -nocapture
+        run: cargo test --all --no-capture
