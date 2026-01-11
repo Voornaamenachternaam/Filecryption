@@ -23,7 +23,7 @@ const ENCRYPTSUFFIX: &str = "_encrypted";
 const CHUNK_SIZE: usize = 128 * 1024; // 128 KiB
 
 /// Minimum secure Argon2 parameters
-const MIN_MEMORY_KB: u32 = 1024; // 1MB minimum for security
+const MIN_MEMORY_KB: u32 = 65536;
 const MIN_ITERATIONS: u32 = 10;  // Minimum iterations for security
 const DEFAULT_MEMORY_KB: u32 = 4096; // 4MB default
 
