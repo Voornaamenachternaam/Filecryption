@@ -249,6 +249,7 @@ fn traverse_and_encrypt(dir: &Path, password: &SecurePassword) -> io::Result<()>
 }
 
 /// Walk a directory recursively decrypting files (non-hidden)
+#[kani::proof]
 fn traverse_and_decrypt(dir: &Path, password: &SecurePassword) -> io::Result<()> {
     for entry in read_dir(dir)? {
         let entry = entry?;
