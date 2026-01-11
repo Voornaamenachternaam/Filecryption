@@ -321,7 +321,7 @@ fn read_param_file(param_file: &Path) -> io::Result<(u32, u32, kdf::Salt)> {
         ));
     }
     
-    let iterations: u32 = MIN_ITERATIONS.max(3); // Maintain backward compatibility
+    let iterations: u32 = MIN_ITERATIONS; // Use secure minimum, no backward compatibility for weak parameters
     Ok((iterations, mem, salt))
 }
 
