@@ -26,7 +26,6 @@ const CHUNK_SIZE: usize = 128 * 1024; // 128 KiB
 const MIN_MEMORY_KB: u32 = 1024; // 1MB minimum for security
 const MIN_ITERATIONS: u32 = 10;  // Minimum iterations for security
 const DEFAULT_MEMORY_KB: u32 = 4096; // 4MB default
-const DEFAULT_PARALLELISM: u32 = 4;   // 4 threads default
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Filecryption (streaming main.rs)")]
