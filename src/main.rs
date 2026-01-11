@@ -1,7 +1,9 @@
 use std::fs::{File, OpenOptions, read_dir};
 use std::io::{self, BufReader, BufWriter, Read, Write};
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
+
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::process::exit;
 
 use base64::{Engine as _, engine::general_purpose};
@@ -269,19 +271,33 @@ fn traverse_and_decrypt(dir: &Path, password: &SecurePassword) -> io::Result<()>
 }
 
 /// Write a tiny parameters file next to the input file for decryption (mem:param:salt)
+/// Create a file with secure permissions (cross-platform)
+fn create_secure_file(path: &Path) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.create(true)
+           .write(true)
+           .truncate(true);
+    
+    #[cfg(unix)]
+    {
+        options.mode(0o600);
+    }
+    
+    // On Windows, new files created by the current user typically have
+    // secure default permissions (accessible only to the user and system)
+    // so no additional permission setting is needed
+    
+    options.open(path)
+}
+
 fn write_param_file(path: &Path, mem: u32, salt: &kdf::Salt) -> io::Result<()> {
     let parent = path.parent().unwrap_or(Path::new("."));
     let param_file = parent.join(FILEPARAM);
 
     // Create parameter file with secure permissions (600)
     let mut f = OpenOptions::new()
-        .mode(0o600)
-        .create(true)
-        .append(false)
-        .write(true)
-        .truncate(true)
-        .open(param_file)?;
-    // We'll store memory parameter and base64(salt)
+    let mut f = create_secure_file(&param_file)?;
+    
     let b64_salt = general_purpose::STANDARD.encode(salt.as_ref());
     let line = format!("{}:{}\n", mem, b64_salt);
     f.write_all(line.as_bytes())?;
@@ -361,12 +377,7 @@ fn encrypt_file_streaming(
 
     // Create output file with secure permissions (600)
     let outfile = OpenOptions::new()
-        .mode(0o600)
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(out_path)?;
-    let mut wtr = BufWriter::new(outfile);
+    let outfile = create_secure_file(out_path)?;
 
     let (mut sealer, nonce) = StreamSealer::new(secret_key)
         .map_err(|_| io::Error::other("Failed to create StreamSealer"))?;
@@ -414,12 +425,7 @@ fn decrypt_file_streaming(
 
     // Create output file with secure permissions (600)
     let outfile = OpenOptions::new()
-        .mode(0o600)
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(out_path)?;
-    let mut wtr = BufWriter::new(outfile);
+    let outfile = create_secure_file(out_path)?;
 
     // Read nonce
     let mut nonce_buf = vec![0u8; NONCE_LEN];
