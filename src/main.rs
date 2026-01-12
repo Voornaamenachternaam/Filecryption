@@ -307,7 +307,6 @@ fn write_param_file(path: &Path, mem: u32, salt: &kdf::Salt) -> io::Result<()> {
     let param_file = parent.join(FILEPARAM);
 
     // Create parameter file with secure permissions (600)
-    let mut f = OpenOptions::new()
     let mut f = create_secure_file(&param_file)?;
     let b64_salt = general_purpose::STANDARD.encode(salt.as_ref());
     let line = format!("{}:{}\n", mem, b64_salt);
@@ -387,7 +386,6 @@ fn encrypt_file_streaming(
     let mut rdr = BufReader::new(infile);
 
     // Create output file with secure permissions (600)
-    let outfile = OpenOptions::new()
     let outfile = create_secure_file(out_path)?;
     let mut wtr = BufWriter::new(outfile);
     let (mut sealer, nonce) = StreamSealer::new(secret_key)
@@ -435,7 +433,6 @@ fn decrypt_file_streaming(
     let mut rdr = BufReader::new(infile);
 
     // Create output file with secure permissions (600)
-    let outfile = OpenOptions::new()
     let outfile = create_secure_file(out_path)?;
     let mut wtr = BufWriter::new(outfile);
     // Read nonce
