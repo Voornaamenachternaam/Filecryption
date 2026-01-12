@@ -278,27 +278,25 @@ fn traverse_and_decrypt(dir: &Path, password: &SecurePassword) -> io::Result<()>
 /// Create a file with secure permissions (cross-platform)
 fn create_secure_file(path: &Path) -> io::Result<File> {
     let mut options = OpenOptions::new();
-    options.create(true)
-           .write(true)
-           .truncate(true);
-    
+    options.create(true).write(true).truncate(true);
+
     #[cfg(unix)]
     {
         options.mode(0o600);
     }
-    
+
     #[cfg(windows)]
     {
         // On Windows, we rely on the default file permissions
         // and the user's file system permissions
         // Additional Windows-specific security could be added here if needed
     }
-    
+
     #[cfg(not(any(unix, windows)))]
     {
         // Fallback for other platforms - use default permissions
     }
-    
+
     options.open(path)
 }
 
