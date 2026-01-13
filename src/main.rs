@@ -164,9 +164,7 @@ fn decrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
         if n == 0 {
             break;
         }
-        let plain = dec.open_chunk(&buffer[..n], &mut output)?;
-        output.write_all(&plain)?;
-        plain.zeroize();
+        dec.open_chunk(&buffer[..n], &mut output)?;
     }
 
     output.flush()?;
