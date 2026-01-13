@@ -201,7 +201,7 @@ fn derive_key(password: &Zeroizing<String>, salt: &[u8]) -> io::Result<SecretKey
         &mut key_bytes,
         password.as_bytes(),
         salt,
-        kdf::Params::argon2id(3, 64 * 1024, 1),
+        kdf::Params::argon2id(10, 64 * 1024, 1),
     )
     .map_err(|_| io::Error::new(io::ErrorKind::Other, "KDF failed"))?;
 
