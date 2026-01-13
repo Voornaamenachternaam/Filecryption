@@ -31,7 +31,12 @@ const MIN_ITERATIONS: u32 = 10; // Minimum iterations for security
 const DEFAULT_MEMORY_KB: u32 = 4096; // 4MB default
 
 #[derive(Parser, Debug)]
-#[command(author, version, about = "Filecryption (streaming main.rs)")]
+#[command(
+    name = "filecryption",
+    author = "Filecryption Team",
+    version = "0.9.32", 
+    about = "A secure file encryption/decryption tool using Argon2 and XChaCha20Poly1305",
+    long_about = "Filecryption provides secure file encryption and decryption using industry-standard cryptographic algorithms.\n\nExamples:\n  filecryption encrypt myfile.txt\n  filecryption decrypt myfile.txt_encrypted\n  filecryption encrypt-dir /path/to/directory\n  filecryption decrypt-dir /path/to/directory")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -40,22 +45,32 @@ struct Cli {
 #[derive(Subcommand, Debug)]
 enum Commands {
     /// Encrypt a file (writes <filename>_encrypted)
+    #[command(visible_alias = "enc")]
     Encrypt {
         /// Input file to encrypt
+        #[arg(help = "Path to the file to encrypt")]
         file: PathBuf,
     },
 
     /// Decrypt a file produced by this tool
+    #[command(visible_alias = "dec")]
     Decrypt {
         /// Input file to decrypt (should have nonce + chunked ciphertext)
+        #[arg(help = "Path to the encrypted file to decrypt")]
         file: PathBuf,
     },
 
     /// Recursively encrypt all files in a directory (non-hidden)
-    EncryptDir { dir: PathBuf },
+    EncryptDir { 
+        #[arg(help = "Path to the directory to encrypt")]
+        dir: PathBuf 
+    },
 
     /// Recursively decrypt a directory produced by EncryptDir
-    DecryptDir { dir: PathBuf },
+    DecryptDir { 
+        #[arg(help = "Path to the directory to decrypt")]
+        dir: PathBuf 
+    },
 }
 
 /// Secure password wrapper that zeroizes on drop
@@ -76,34 +91,96 @@ impl SecurePassword {
 
 fn main() {
     let cli = Cli::parse();
+    
+    // Add debug output to help diagnose issues
+    #[cfg(debug_assertions)]
+    {
+        eprintln!("Debug: Parsed command: {:?}", cli.command);
+    }
+    
+    // Ensure we have a valid command
+    println!("Filecryption v{} - Starting operation...", env!("CARGO_PKG_VERSION"));
 
     match &cli.command {
         Commands::Encrypt { file } => {
+            println!("Encrypting file: {}", file.display());
+            
+            // Validate input file exists
+            if !file.exists() {
+                eprintln!("Error: Input file '{}' does not exist", file.display());
+                exit(1);
+            }
+            
+            if !file.is_file() {
+                eprintln!("Error: '{}' is not a regular file", file.display());
+                exit(1);
+            }
+            
             let pw = prompt_for_password(true);
             if let Err(e) = encrypt_path(file, &pw) {
                 eprintln!("Encryption failed: {e}");
                 exit(1);
+            } else {
+                println!("✓ Encryption completed successfully!");
             }
         }
         Commands::Decrypt { file } => {
+            println!("Decrypting file: {}", file.display());
+            
+            // Validate input file exists
+            if !file.exists() {
+                eprintln!("Error: Input file '{}' does not exist", file.display());
+                exit(1);
+            }
+            
             let pw = prompt_for_password(false);
             if let Err(e) = decrypt_path(file, &pw) {
                 eprintln!("Decryption failed: {e}");
                 exit(1);
+            } else {
+                println!("✓ Decryption completed successfully!");
             }
         }
         Commands::EncryptDir { dir } => {
+            println!("Encrypting directory: {}", dir.display());
+            
+            if !dir.exists() {
+                eprintln!("Error: Directory '{}' does not exist", dir.display());
+                exit(1);
+            }
+            
+            if !dir.is_dir() {
+                eprintln!("Error: '{}' is not a directory", dir.display());
+                exit(1);
+            }
+            
             let pw = prompt_for_password(true);
             if let Err(e) = traverse_and_encrypt(dir, &pw) {
                 eprintln!("Directory encryption failed: {e}");
                 exit(1);
+            } else {
+                println!("✓ Directory encryption completed successfully!");
             }
         }
         Commands::DecryptDir { dir } => {
+            println!("Decrypting directory: {}", dir.display());
+            
+            if !dir.exists() {
+                eprintln!("Error: Directory '{}' does not exist", dir.display());
+                exit(1);
+            }
+            
+            if !dir.is_dir() {
+                eprintln!("Error: '{}' is not a directory", dir.display());
+                exit(1);
+            }
+            
             let pw = prompt_for_password(false);
             if let Err(e) = traverse_and_decrypt(dir, &pw) {
                 eprintln!("Directory decryption failed: {e}");
                 exit(1);
+            } else {
+                println!("✓ Directory decryption completed successfully!");
             }
         }
     }
@@ -160,7 +237,12 @@ fn validate_password_strength(password: &str) -> Result<(), &'static str> {
 fn encrypt_path(path: &Path, password: &SecurePassword) -> io::Result<()> {
     if path.is_dir() {
         return Err(io::Error::other(
-            "encrypt_path: expected file, got directory",
+            "encrypt_path: expected file, got directory. Use 'encrypt-dir' command for directories",
+        ));
+    }
+    if !path.exists() {
+        return Err(io::Error::other(
+            "encrypt_path: file does not exist",
         ));
     }
     let out_path = path.with_file_name(format!(
@@ -180,6 +262,7 @@ fn encrypt_path(path: &Path, password: &SecurePassword) -> io::Result<()> {
         derive_secret_key_from_password(password.as_str(), &salt, iter_param, mem_param)?;
     // encrypt streaming
     encrypt_file_streaming(path, &out_path, &secret_key)?;
+    
     println!("Encrypted {} -> {}", path.display(), out_path.display());
     Ok(())
 }
@@ -188,7 +271,12 @@ fn encrypt_path(path: &Path, password: &SecurePassword) -> io::Result<()> {
 fn decrypt_path(path: &Path, password: &SecurePassword) -> io::Result<()> {
     if path.is_dir() {
         return Err(io::Error::other(
-            "decrypt_path: expected file, got directory",
+            "decrypt_path: expected file, got directory. Use 'decrypt-dir' command for directories",
+        ));
+    }
+    if !path.exists() {
+        return Err(io::Error::other(
+            "decrypt_path: file does not exist",
         ));
     }
     // read parameters file (sidecar)
