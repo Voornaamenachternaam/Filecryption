@@ -287,9 +287,10 @@ fn create_secure_file(path: &Path) -> io::Result<File> {
 
     #[cfg(windows)]
     {
-        // On Windows, we rely on the default file permissions
-        // and the user's file system permissions
-        // Additional Windows-specific security could be added here if needed
+        // On Windows, set the file as hidden for additional security
+        // FILE_ATTRIBUTE_HIDDEN = 0x2
+        // This provides some security through obscurity
+        options.custom_flags(0x2);
     }
 
     #[cfg(not(any(unix, windows)))]
