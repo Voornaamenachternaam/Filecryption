@@ -227,7 +227,7 @@ fn derive_key(password: &Zeroizing<String>, salt: &[u8]) -> io::Result<OrionSecr
         .map_err(|_| io::Error::other("Salt init error"))?;
     
     // Argon2id configuration (Memory-hard against GPU cracking)
-    let derived_key = kdf::derive_key(&pw_wrapper, &salt_wrapper, 3, 64 * 1024, 1)
+    let derived_key = kdf::derive_key(&pw_wrapper, &salt_wrapper, 10, 64 * 1024, 1)
         .map_err(|_| io::Error::other("KDF derivation failed"))?;
 
     OrionSecretKey::from_slice(derived_key.unprotected_as_bytes())
