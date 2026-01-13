@@ -95,7 +95,7 @@ fn increment_nonce(nonce: &mut [u8; NONCE_LEN]) {
 }
 
 fn encrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
-    if path.extension().map_or(false, |e| e == "enc" || e == "tmp") {
+    if path.extension().is_some_and(|e| e == "enc" || e == "tmp") {
         return Ok(());
     }
 
@@ -130,11 +130,11 @@ fn encrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
         if n == 0 { break; }
 
         let nonce = Nonce::from_slice(&current_nonce_bytes)
-            .map_err(|_| io::Error::new(io::ErrorKind::Other, "Nonce construction error"))?;
+            .map_err(|_| io::Error::other("Nonce construction error"))?;
         
         let mut output_chunk = vec![0u8; n + TAG_LEN];
         xchacha20poly1305::seal(&key, &nonce, &buffer[..n], None, &mut output_chunk)
-            .map_err(|_| io::Error::new(io::ErrorKind::Other, "Cryptographic seal failure"))?;
+            .map_err(|_| io::Error::other("Cryptographic seal failure"))?;
 
         writer.write_all(&output_chunk)?;
         increment_nonce(&mut current_nonce_bytes);
@@ -147,7 +147,7 @@ fn encrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
 }
 
 fn decrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
-    if !path.extension().map_or(false, |e| e == "enc") {
+    if path.extension().is_none_or(|e| e != "enc") {
         return Ok(());
     }
 
@@ -185,7 +185,7 @@ fn decrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
         }
 
         let nonce = Nonce::from_slice(&current_nonce_bytes)
-            .map_err(|_| io::Error::new(io::ErrorKind::Other, "Nonce construction error"))?;
+            .map_err(|_| io::Error::other("Nonce construction error"))?;
 
         let mut plaintext = vec![0u8; n - TAG_LEN];
         xchacha20poly1305::open(&key, &nonce, &buffer[..n], None, &mut plaintext)
@@ -208,12 +208,10 @@ fn walk_dir(dir: &Path, pw: &Zeroizing<String>, encrypt: bool) -> io::Result<()>
         let path = entry?.path();
         if path.is_dir() {
             walk_dir(&path, pw, encrypt)?;
+        } else if encrypt {
+            encrypt_file(&path, pw)?;
         } else {
-            if encrypt {
-                encrypt_file(&path, pw)?;
-            } else {
-                decrypt_file(&path, pw)?;
-            }
+            decrypt_file(&path, pw)?;
         }
     }
     Ok(())
@@ -222,17 +220,17 @@ fn walk_dir(dir: &Path, pw: &Zeroizing<String>, encrypt: bool) -> io::Result<()>
 /// High-level Argon2id Key Derivation
 fn derive_key(password: &Zeroizing<String>, salt: &[u8]) -> io::Result<OrionSecretKey> {
     let pw_wrapper = Password::from_slice(password.as_bytes())
-        .map_err(|_| io::Error::new(io::ErrorKind::Other, "Password init error"))?;
+        .map_err(|_| io::Error::other("Password init error"))?;
     let salt_wrapper = OrionSalt::from_slice(salt)
-        .map_err(|_| io::Error::new(io::ErrorKind::Other, "Salt init error"))?;
+        .map_err(|_| io::Error::other("Salt init error"))?;
     
     // Using high-level KDF: Argon2id (3 passes, 64MB RAM, 1 parallelism)
     let derived_key = kdf::derive_key(&pw_wrapper, &salt_wrapper, 3, 64 * 1024, 1)
-        .map_err(|_| io::Error::new(io::ErrorKind::Other, "KDF derivation failed"))?;
+        .map_err(|_| io::Error::other("KDF derivation failed"))?;
 
     // Convert high-level key to hazardous AEAD key slice
     OrionSecretKey::from_slice(derived_key.unprotected_as_bytes())
-        .map_err(|_| io::Error::new(io::ErrorKind::Other, "Key cast failure"))
+        .map_err(|_| io::Error::other("Key cast failure"))
 }
 
 trait ExitOnErr<T> {
