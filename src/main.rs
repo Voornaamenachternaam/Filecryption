@@ -72,8 +72,8 @@ fn main() {
 
 fn prompt_password(confirm: bool) -> Zeroizing<String> {
     print!("Password: ");
-    io::stdout().flush().unwrap();
-    let pw = read_password().unwrap();
+    io::stdout().flush().expect("Failed to flush stdout");
+    let pw = read_password().expect("Failed to read password");
 
     if confirm {
         print!("Confirm password: ");
