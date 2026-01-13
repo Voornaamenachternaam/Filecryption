@@ -6,26 +6,19 @@ use std::path::{Path, PathBuf};
 use std::process::exit;
 
 use clap::{Parser, Subcommand};
-use orion::{
-    aead::{self, SecretKey},
-    kdf,
-};
+use orion::hazardous::aead::xchacha20poly1305::{self, Nonce, SecretKey as OrionSecretKey};
+use orion::hazardous::kdf::argon2;
 use rand::rngs::OsRng;
 use rand::RngCore;
 use rpassword::read_password;
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroizing;
 
 // --- CONSTANTS ---
-// File Header: MAGIC (8) | SALT (16) | NONCE (24)
 const MAGIC: &[u8; 8] = b"FCRYPT01";
 const SALT_LEN: usize = 16;
 const NONCE_LEN: usize = 24;
-
-// Chunk Configuration
-// Plaintext is read in 64KB chunks.
-// Ciphertext is written as 64KB + 16 bytes (Poly1305 Tag).
-const CHUNK_SIZE: usize = 64 * 1024;
 const TAG_LEN: usize = 16;
+const CHUNK_SIZE: usize = 64 * 1024; // 64KB chunks
 
 #[derive(Parser)]
 #[command(
@@ -44,13 +37,10 @@ struct Cli {
 enum Command {
     /// Encrypt a single file
     Encrypt { file: PathBuf },
-
     /// Decrypt a previously encrypted file
     Decrypt { file: PathBuf },
-
     /// Recursively encrypt a directory
     EncryptDir { dir: PathBuf },
-
     /// Recursively decrypt a directory
     DecryptDir { dir: PathBuf },
 }
@@ -61,19 +51,19 @@ fn main() {
     match cli.command {
         Command::Encrypt { file } => {
             let pw = prompt_password(true);
-            encrypt_file(&file, &pw).unwrap_or_exit("encryption failed");
+            encrypt_file(&file, &pw).unwrap_or_exit("Encryption failed");
         }
         Command::Decrypt { file } => {
             let pw = prompt_password(false);
-            decrypt_file(&file, &pw).unwrap_or_exit("decryption failed");
+            decrypt_file(&file, &pw).unwrap_or_exit("Decryption failed");
         }
         Command::EncryptDir { dir } => {
             let pw = prompt_password(true);
-            walk_encrypt(&dir, &pw).unwrap_or_exit("directory encryption failed");
+            walk_dir(&dir, &pw, true).unwrap_or_exit("Directory encryption failed");
         }
         Command::DecryptDir { dir } => {
             let pw = prompt_password(false);
-            walk_decrypt(&dir, &pw).unwrap_or_exit("directory decryption failed");
+            walk_dir(&dir, &pw, false).unwrap_or_exit("Directory decryption failed");
         }
     }
 }
@@ -88,16 +78,14 @@ fn prompt_password(confirm: bool) -> Zeroizing<String> {
         io::stdout().flush().expect("Failed to flush stdout");
         let confirm_pw = read_password().expect("Failed to read password");
         if pw != confirm_pw {
-            eprintln!("Passwords do not match");
+            eprintln!("Error: Passwords do not match");
             exit(1);
         }
     }
-
     Zeroizing::new(pw)
 }
 
-/// Increments the nonce in Big-Endian order.
-/// This ensures every chunk uses a unique nonce derived from the file's base nonce.
+/// Increment the nonce (Big-Endian) to ensure chunk uniqueness.
 fn increment_nonce(nonce: &mut [u8; NONCE_LEN]) {
     for byte in nonce.iter_mut().rev() {
         *byte = byte.wrapping_add(1);
@@ -108,204 +96,125 @@ fn increment_nonce(nonce: &mut [u8; NONCE_LEN]) {
 }
 
 fn encrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
-    // 1. Skip if already encrypted or is a temporary/system file
-    if let Some(ext) = path.extension() {
-        if ext == "enc" || ext == "tmp" {
-            return Ok(());
-        }
+    // Skip if already encrypted or is a temporary file
+    if path.extension().map_or(false, |e| e == "enc" || e == "tmp") {
+        return Ok(());
     }
 
-    // 2. Prepare Output Paths
-    let mut out_path = path.as_os_str().to_owned();
-    out_path.push(".enc");
-    let target_path = PathBuf::from(out_path);
+    let mut out_path = path.to_path_buf();
+    let mut os_name = out_path.file_name().unwrap().to_os_string();
+    os_name.push(".enc");
+    out_path.set_file_name(os_name);
 
-    // Use a temp file for atomic writes
-    let mut tmp_path = target_path.clone();
+    let mut tmp_path = out_path.clone();
     tmp_path.set_extension("tmp");
 
-    // 3. Generate Crypto Parameters
     let mut salt = [0u8; SALT_LEN];
+    let mut base_nonce = [0u8; NONCE_LEN];
     OsRng.fill_bytes(&mut salt);
+    OsRng.fill_bytes(&mut base_nonce);
 
     let key = derive_key(password, &salt)?;
+    let mut current_nonce_bytes = base_nonce;
 
-    let mut nonce = [0u8; NONCE_LEN];
-    OsRng.fill_bytes(&mut nonce);
-    
-    // We keep a running nonce for chunk encryption
-    let mut current_nonce = nonce; 
+    let input = File::open(path)?;
+    let mut reader = BufReader::new(input);
+    let output = File::create(&tmp_path)?;
+    let mut writer = BufWriter::new(output);
 
-    // 4. Open Files
-    let input_file = File::open(path)?;
-    let mut input = BufReader::new(input_file);
-    
-    let output_file = File::create(&tmp_path)?;
-    let mut output = BufWriter::new(output_file);
+    // Header
+    writer.write_all(MAGIC)?;
+    writer.write_all(&salt)?;
+    writer.write_all(&base_nonce)?;
 
-    // 5. Write Header
-    output.write_all(MAGIC)?;
-    output.write_all(&salt)?;
-    output.write_all(&nonce)?;
-
-    // 6. Chunk Processing
-    // Buffer is zeroized on drop automatically
     let mut buffer = Zeroizing::new(vec![0u8; CHUNK_SIZE]);
-
     loop {
-        let n = input.read(&mut buffer)?;
-        if n == 0 {
-            break;
-        }
+        let n = reader.read(&mut buffer)?;
+        if n == 0 { break; }
 
-        let chunk_nonce = aead::Nonce::from_slice(&current_nonce)
-            .map_err(|_| io::Error::new(io::ErrorKind::Other, "Invalid nonce"))?;
+        let nonce = Nonce::from_slice(&current_nonce_bytes)
+            .map_err(|_| io::Error::new(io::ErrorKind::Other, "Nonce error"))?;
         
-        // Encrypt the chunk (Seal)
-        // seal() produces [Ciphertext + Tag]
-        let ciphertext = aead::seal(&key, &chunk_nonce, &buffer[..n])
-            .map_err(|_| io::Error::new(io::ErrorKind::Other, "Encryption error"))?;
+        // Ciphertext is buffer + Tag
+        let mut output_chunk = vec![0u8; n + TAG_LEN];
+        xchacha20poly1305::seal(&key, &nonce, &buffer[..n], None, &mut output_chunk)
+            .map_err(|_| io::Error::new(io::ErrorKind::Other, "Encryption internal error"))?;
 
-        output.write_all(&ciphertext)?;
-        
-        increment_nonce(&mut current_nonce);
+        writer.write_all(&output_chunk)?;
+        increment_nonce(&mut current_nonce_bytes);
     }
 
-    output.flush()?;
-    
-    // 7. Atomic Rename (Finalize)
-    fs::rename(&tmp_path, &target_path)?;
-
+    writer.flush()?;
+    drop(writer);
+    fs::rename(&tmp_path, &out_path)?;
     Ok(())
 }
 
 fn decrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
-    // 1. Check extension
     if !path.extension().map_or(false, |e| e == "enc") {
         return Ok(());
     }
 
-    // 2. Open Input
-    let mut input_file = File::open(path)?;
-    let mut input = BufReader::new(input_file);
+    let input = File::open(path)?;
+    let mut reader = BufReader::new(input);
 
-    // 3. Read & Verify Header
     let mut magic = [0u8; 8];
-    input.read_exact(&mut magic)?;
+    reader.read_exact(&mut magic)?;
     if &magic != MAGIC {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "Invalid file header"));
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "Invalid file format"));
     }
 
     let mut salt = [0u8; SALT_LEN];
-    let mut nonce = [0u8; NONCE_LEN];
-    input.read_exact(&mut salt)?;
-    input.read_exact(&mut nonce)?;
+    let mut base_nonce = [0u8; NONCE_LEN];
+    reader.read_exact(&mut salt)?;
+    reader.read_exact(&mut base_nonce)?;
 
-    // 4. Derive Key
     let key = derive_key(password, &salt)?;
-    let mut current_nonce = nonce;
+    let mut current_nonce_bytes = base_nonce;
 
-    // 5. Prepare Output Paths (Atomic)
+    // Output path: remove .enc
     let out_path = path.with_extension("");
     let mut tmp_path = out_path.clone();
-    
-    // Safely append .tmp to the original filename (e.g., file.txt -> file.txt.tmp)
-    if let Some(ext) = tmp_path.extension() {
-        let mut new_ext = ext.to_os_string();
-        new_ext.push(".tmp");
-        tmp_path.set_extension(new_ext);
-    } else {
-        tmp_path.set_extension("tmp");
-    }
+    tmp_path.set_extension("tmp");
 
-    let output_file = File::create(&tmp_path)?;
-    let mut output = BufWriter::new(output_file);
+    let output = File::create(&tmp_path)?;
+    let mut writer = BufWriter::new(output);
 
-    // 6. Chunk Processing
-    // Buffer must be large enough to hold Ciphertext (max CHUNK_SIZE) + Tag (16 bytes)
+    // Buffer: Read Ciphertext + Tag
     let mut buffer = Zeroizing::new(vec![0u8; CHUNK_SIZE + TAG_LEN]);
-
     loop {
-        // We attempt to read a full chunk (ChunkSize + Tag). 
-        // If we read less, it must be the EOF or a short last block.
-        // We cannot use read_exact because the last chunk might be smaller.
-        
-        let mut chunk_buf = vec![0u8; CHUNK_SIZE + TAG_LEN];
-        let mut bytes_read = 0;
-        
-        // Robust read loop to ensure we fill the buffer as much as the file allows
-        while bytes_read < CHUNK_SIZE + TAG_LEN {
-            let n = input.read(&mut chunk_buf[bytes_read..])?;
-            if n == 0 {
-                break;
-            }
-            bytes_read += n;
+        let n = reader.read(&mut buffer)?;
+        if n == 0 { break; }
+
+        if n < TAG_LEN {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "Ciphertext truncated"));
         }
 
-        if bytes_read == 0 {
-            break; // EOF
-        }
+        let nonce = Nonce::from_slice(&current_nonce_bytes)
+            .map_err(|_| io::Error::new(io::ErrorKind::Other, "Nonce error"))?;
 
-        // A valid encrypted chunk must have at least the Tag bytes
-        if bytes_read < TAG_LEN {
-             return Err(io::Error::new(io::ErrorKind::InvalidData, "Corrupted file: Chunk too short"));
-        }
+        let mut plaintext = vec![0u8; n - TAG_LEN];
+        xchacha20poly1305::open(&key, &nonce, &buffer[..n], None, &mut plaintext)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Decryption failed (Wrong password or corrupted file)"))?;
 
-        let chunk_nonce = aead::Nonce::from_slice(&current_nonce)
-            .map_err(|_| io::Error::new(io::ErrorKind::Other, "Invalid nonce"))?;
-
-        // Decrypt (Open)
-        // This function authenticates the data against the tag (last 16 bytes).
-        // If the password is wrong or data corrupted, this returns Error.
-        let plaintext = aead::open(&key, &chunk_nonce, &chunk_buf[..bytes_read])
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Decryption/Auth failed"))?;
-
-        output.write_all(&plaintext)?;
-
-        increment_nonce(&mut current_nonce);
+        writer.write_all(&plaintext)?;
+        increment_nonce(&mut current_nonce_bytes);
     }
 
-    output.flush()?;
-    
-    // 7. Finalize
+    writer.flush()?;
+    drop(writer);
     fs::rename(&tmp_path, &out_path)?;
-
     Ok(())
 }
 
-fn walk_encrypt(dir: &Path, pw: &Zeroizing<String>) -> io::Result<()> {
-    if dir.is_dir() {
-        for entry in fs::read_dir(dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            
-            // Skip symlinks to avoid loops or unintended encryption
-            if path.is_symlink() {
-                continue;
-            }
-
-            if path.is_dir() {
-                walk_encrypt(&path, pw)?;
-            } else {
+fn walk_dir(dir: &Path, pw: &Zeroizing<String>, encrypt: bool) -> io::Result<()> {
+    for entry in fs::read_dir(dir)? {
+        let path = entry?.path();
+        if path.is_dir() {
+            walk_dir(&path, pw, encrypt)?;
+        } else {
+            if encrypt {
                 encrypt_file(&path, pw)?;
-            }
-        }
-    }
-    Ok(())
-}
-
-fn walk_decrypt(dir: &Path, pw: &Zeroizing<String>) -> io::Result<()> {
-    if dir.is_dir() {
-        for entry in fs::read_dir(dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            
-            if path.is_symlink() {
-                continue;
-            }
-
-            if path.is_dir() {
-                walk_decrypt(&path, pw)?;
             } else {
                 decrypt_file(&path, pw)?;
             }
@@ -314,18 +223,23 @@ fn walk_decrypt(dir: &Path, pw: &Zeroizing<String>) -> io::Result<()> {
     Ok(())
 }
 
-fn derive_key(password: &Zeroizing<String>, salt: &[u8]) -> io::Result<SecretKey> {
-    let mut key_bytes = Zeroizing::new(vec![0u8; 32]);
-    kdf::derive_key(
-        &mut key_bytes,
+fn derive_key(password: &Zeroizing<String>, salt: &[u8]) -> io::Result<OrionSecretKey> {
+    let mut key_bytes = [0u8; 32];
+    // Argon2id: 3 passes, 64MB memory, 1 lane (Standard high-security parameters)
+    // Using orion hazardous argon2 interface
+    argon2::derive_key(
         password.as_bytes(),
         salt,
-        kdf::Params::argon2id(10, 64 * 1024, 1),
+        3,           // iterations
+        64 * 1024,   // memory in KB
+        1,           // parallelism
+        argon2::Variant::Argon2id,
+        &mut key_bytes,
     )
     .map_err(|_| io::Error::new(io::ErrorKind::Other, "KDF failed"))?;
 
-    SecretKey::from_slice(&key_bytes)
-        .map_err(|_| io::Error::new(io::ErrorKind::Other, "Key init failed"))
+    OrionSecretKey::from_slice(&key_bytes)
+        .map_err(|_| io::Error::new(io::ErrorKind::Other, "Key creation failed"))
 }
 
 trait ExitOnErr<T> {
