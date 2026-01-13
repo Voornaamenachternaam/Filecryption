@@ -7,18 +7,17 @@ use std::process::exit;
 
 use clap::{Parser, Subcommand};
 use orion::hazardous::aead::xchacha20poly1305::{self, Nonce, SecretKey as OrionSecretKey};
-use orion::hazardous::kdf::argon2id;
+use orion::kdf::{self, Password, Salt as OrionSalt};
 use rand::{rng, RngCore};
 use rpassword::read_password;
 use zeroize::Zeroizing;
 
 // --- CRYPTOGRAPHIC SPECIFICATIONS ---
-// File Header: MAGIC (8 bytes) | SALT (16 bytes) | BASE_NONCE (24 bytes)
 const MAGIC: &[u8; 8] = b"FCRYPT01";
 const SALT_LEN: usize = 16;
 const NONCE_LEN: usize = 24;
 const TAG_LEN: usize = 16;
-const CHUNK_SIZE: usize = 64 * 1024; // 64KB blocks to maintain low memory footprint
+const CHUNK_SIZE: usize = 64 * 1024; // 64KB block size
 
 #[derive(Parser)]
 #[command(
@@ -85,7 +84,7 @@ fn prompt_password(confirm: bool) -> Zeroizing<String> {
     Zeroizing::new(pw)
 }
 
-/// Increment the nonce (Big-Endian) to ensure every chunk is encrypted uniquely.
+/// Increment the nonce (Big-Endian) to ensure block uniqueness.
 fn increment_nonce(nonce: &mut [u8; NONCE_LEN]) {
     for byte in nonce.iter_mut().rev() {
         *byte = byte.wrapping_add(1);
@@ -96,7 +95,6 @@ fn increment_nonce(nonce: &mut [u8; NONCE_LEN]) {
 }
 
 fn encrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
-    // Avoid processing already encrypted or system/temp files
     if path.extension().map_or(false, |e| e == "enc" || e == "tmp") {
         return Ok(());
     }
@@ -108,10 +106,10 @@ fn encrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
     let mut salt = [0u8; SALT_LEN];
     let mut base_nonce = [0u8; NONCE_LEN];
     
-    // rand 0.9 initialization (avoids 'gen' keyword)
-    let mut rng_provider = rng();
-    rng_provider.fill_bytes(&mut salt);
-    rng_provider.fill_bytes(&mut base_nonce);
+    // rand 0.9 pattern
+    let mut rng_instance = rng();
+    rng_instance.fill_bytes(&mut salt);
+    rng_instance.fill_bytes(&mut base_nonce);
 
     let key = derive_key(password, &salt)?;
     let mut current_nonce_bytes = base_nonce;
@@ -121,7 +119,7 @@ fn encrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
     let output = File::create(&tmp_path)?;
     let mut writer = BufWriter::new(output);
 
-    // WRITE HEADER
+    // Write file header
     writer.write_all(MAGIC)?;
     writer.write_all(&salt)?;
     writer.write_all(&base_nonce)?;
@@ -132,11 +130,11 @@ fn encrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
         if n == 0 { break; }
 
         let nonce = Nonce::from_slice(&current_nonce_bytes)
-            .map_err(|_| io::Error::new(io::ErrorKind::Other, "Nonce error"))?;
+            .map_err(|_| io::Error::new(io::ErrorKind::Other, "Nonce construction error"))?;
         
         let mut output_chunk = vec![0u8; n + TAG_LEN];
         xchacha20poly1305::seal(&key, &nonce, &buffer[..n], None, &mut output_chunk)
-            .map_err(|_| io::Error::new(io::ErrorKind::Other, "Encryption internal failure"))?;
+            .map_err(|_| io::Error::new(io::ErrorKind::Other, "Cryptographic seal failure"))?;
 
         writer.write_all(&output_chunk)?;
         increment_nonce(&mut current_nonce_bytes);
@@ -144,8 +142,6 @@ fn encrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
 
     writer.flush()?;
     drop(writer);
-    
-    // Atomic move prevents corrupted files on system crash
     fs::rename(&tmp_path, &out_path)?;
     Ok(())
 }
@@ -161,7 +157,7 @@ fn decrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
     let mut magic = [0u8; 8];
     reader.read_exact(&mut magic)?;
     if &magic != MAGIC {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "Invalid header"));
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "Invalid file format"));
     }
 
     let mut salt = [0u8; SALT_LEN];
@@ -185,15 +181,15 @@ fn decrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
         if n == 0 { break; }
 
         if n < TAG_LEN {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "Ciphertext truncated"));
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "Truncated block"));
         }
 
         let nonce = Nonce::from_slice(&current_nonce_bytes)
-            .map_err(|_| io::Error::new(io::ErrorKind::Other, "Nonce error"))?;
+            .map_err(|_| io::Error::new(io::ErrorKind::Other, "Nonce construction error"))?;
 
         let mut plaintext = vec![0u8; n - TAG_LEN];
         xchacha20poly1305::open(&key, &nonce, &buffer[..n], None, &mut plaintext)
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Auth failed (bad password or data corruption)"))?;
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Auth failure: invalid password or data tampered"))?;
 
         writer.write_all(&plaintext)?;
         increment_nonce(&mut current_nonce_bytes);
@@ -201,7 +197,6 @@ fn decrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
 
     writer.flush()?;
     drop(writer);
-    
     fs::rename(&tmp_path, &out_path)?;
     Ok(())
 }
@@ -224,23 +219,20 @@ fn walk_dir(dir: &Path, pw: &Zeroizing<String>, encrypt: bool) -> io::Result<()>
     Ok(())
 }
 
+/// High-level Argon2id Key Derivation
 fn derive_key(password: &Zeroizing<String>, salt: &[u8]) -> io::Result<OrionSecretKey> {
-    let mut key_bytes = [0u8; 32];
+    let pw_wrapper = Password::from_slice(password.as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::Other, "Password init error"))?;
+    let salt_wrapper = OrionSalt::from_slice(salt)
+        .map_err(|_| io::Error::new(io::ErrorKind::Other, "Salt init error"))?;
     
-    // Argon2id parameters: iterations=3, memory=64MB, parallelism=1
-    // The Orion v0.17 hazardous API expects these direct parameters
-    argon2id::derive_key(
-        password.as_bytes(),
-        salt,
-        3,           
-        64 * 1024,   
-        1,           
-        &mut key_bytes,
-    )
-    .map_err(|_| io::Error::new(io::ErrorKind::Other, "KDF failed"))?;
+    // Using high-level KDF: Argon2id (3 passes, 64MB RAM, 1 parallelism)
+    let derived_key = kdf::derive_key(&pw_wrapper, &salt_wrapper, 3, 64 * 1024, 1)
+        .map_err(|_| io::Error::new(io::ErrorKind::Other, "KDF derivation failed"))?;
 
-    OrionSecretKey::from_slice(&key_bytes)
-        .map_err(|_| io::Error::new(io::ErrorKind::Other, "Key derivation slice error"))
+    // Convert high-level key to hazardous AEAD key slice
+    OrionSecretKey::from_slice(derived_key.unprotected_as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::Other, "Key cast failure"))
 }
 
 trait ExitOnErr<T> {
