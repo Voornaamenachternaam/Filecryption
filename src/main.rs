@@ -107,9 +107,8 @@ fn encrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
     let mut base_nonce = [0u8; NONCE_LEN];
     
     // rand 0.9 pattern
-    let mut rng_instance = rng();
-    rng_instance.fill_bytes(&mut salt);
-    rng_instance.fill_bytes(&mut base_nonce);
+    OsRng.fill_bytes(&mut salt);
+    OsRng.fill_bytes(&mut base_nonce);
 
     let key = derive_key(password, &salt)?;
     let mut current_nonce_bytes = base_nonce;
