@@ -287,6 +287,9 @@ fn create_secure_file(path: &Path) -> io::Result<File> {
 
     #[cfg(windows)]
     {
+        // Set FILE_ATTRIBUTE_HIDDEN (0x2) for security through obscurity on Windows
+        // This provides cross-platform security parity with Unix file permissions
+        options.attributes(0x2);
     }
 
     #[cfg(not(any(unix, windows)))]
