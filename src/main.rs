@@ -8,7 +8,7 @@ use std::process::exit;
 use clap::{Parser, Subcommand};
 use orion::hazardous::aead::xchacha20poly1305::{self, Nonce, SecretKey as OrionSecretKey};
 use orion::kdf::{self, Password, Salt as OrionSalt};
-use rand::RngCore; // Required trait for try_fill_bytes
+use rand::TryRngCore; // RIGOROUS FIX: Required trait for try_fill_bytes in rand 0.9+
 use rpassword::read_password;
 use zeroize::Zeroizing;
 
@@ -17,7 +17,7 @@ const MAGIC: &[u8; 8] = b"FCRYPT01";
 const SALT_LEN: usize = 16;
 const NONCE_LEN: usize = 24;
 const TAG_LEN: usize = 16;
-const CHUNK_SIZE: usize = 64 * 1024; // 64KB chunks for optimal memory/speed ratio
+const CHUNK_SIZE: usize = 64 * 1024; // 64KB chunks for optimal streaming
 
 #[derive(Parser)]
 #[command(
@@ -84,7 +84,7 @@ fn prompt_password(confirm: bool) -> Zeroizing<String> {
     Zeroizing::new(pw)
 }
 
-/// Increment the nonce (Big-Endian) to ensure block uniqueness across chunks.
+/// Increment the nonce (Big-Endian) to ensure block uniqueness across the stream.
 fn increment_nonce(nonce: &mut [u8; NONCE_LEN]) {
     for byte in nonce.iter_mut().rev() {
         *byte = byte.wrapping_add(1);
@@ -106,8 +106,7 @@ fn encrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
     let mut salt = [0u8; SALT_LEN];
     let mut base_nonce = [0u8; NONCE_LEN];
     
-    // Rigorous Fix for Rand v0.9: 
-    // Use an RNG instance to call try_fill_bytes, ensuring entropy failure is caught.
+    // RIGOROUS AUDIT: Using TryRngCore::try_fill_bytes to ensure entropy is valid.
     let mut rng = rand::rng();
     rng.try_fill_bytes(&mut salt).map_err(io::Error::other)?;
     rng.try_fill_bytes(&mut base_nonce).map_err(io::Error::other)?;
@@ -120,7 +119,7 @@ fn encrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
     let output = File::create(&tmp_path)?;
     let mut writer = BufWriter::new(output);
 
-    // Header: Magic (8) | Salt (16) | Base Nonce (24)
+    // Header: Magic(8) | Salt(16) | BaseNonce(24)
     writer.write_all(MAGIC)?;
     writer.write_all(&salt)?;
     writer.write_all(&base_nonce)?;
@@ -144,7 +143,7 @@ fn encrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
     writer.flush()?;
     drop(writer);
     
-    // Atomic move for consistency on both Linux and Windows 11
+    // Atomic move ensures file safety on both Windows 11 and Linux.
     fs::rename(&tmp_path, &out_path)?;
     Ok(())
 }
@@ -220,13 +219,14 @@ fn walk_dir(dir: &Path, pw: &Zeroizing<String>, encrypt: bool) -> io::Result<()>
     Ok(())
 }
 
+/// Derive a secure key using Argon2id
 fn derive_key(password: &Zeroizing<String>, salt: &[u8]) -> io::Result<OrionSecretKey> {
     let pw_wrapper = Password::from_slice(password.as_bytes())
         .map_err(|_| io::Error::other("Password init error"))?;
     let salt_wrapper = OrionSalt::from_slice(salt)
         .map_err(|_| io::Error::other("Salt init error"))?;
     
-    // Argon2id: 3 iterations, 64MB memory, 1 parallelism
+    // Argon2id configuration (Memory-hard against GPU cracking)
     let derived_key = kdf::derive_key(&pw_wrapper, &salt_wrapper, 3, 64 * 1024, 1)
         .map_err(|_| io::Error::other("KDF derivation failed"))?;
 
