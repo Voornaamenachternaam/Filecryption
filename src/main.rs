@@ -7,9 +7,6 @@ use std::process::exit;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 
-#[cfg(windows)]
-use std::os::windows::fs::OpenOptionsExt;
-
 use base64::{Engine as _, engine::general_purpose};
 use clap::{Parser, Subcommand};
 use orion::aead::SecretKey;
@@ -275,7 +272,7 @@ fn traverse_and_decrypt(dir: &Path, password: &SecurePassword) -> io::Result<()>
 }
 
 /// Write a tiny parameters file next to the input file for decryption (mem:param:salt)
-/// Create a file with secure permissions (cross-platform)
+/// Create a file with secure permissions (cross-platform with limitations on Windows)
 fn create_secure_file(path: &Path) -> io::Result<File> {
     let mut options = OpenOptions::new();
     options.create(true).write(true).truncate(true);
@@ -287,6 +284,25 @@ fn create_secure_file(path: &Path) -> io::Result<File> {
 
     #[cfg(windows)]
     {
+        // On Windows, we set the file as hidden and system to provide some obfuscation.
+        // NOTE: This does NOT provide the same security as Unix mode 0o600.
+        // Hidden files on Windows can be easily revealed and provide no access control.
+        // For true security on Windows, proper ACLs would be needed, but this requires
+        // additional dependencies and complexity. This implementation prioritizes
+        // compatibility and simplicity while acknowledging the security limitation.
+        
+        // Set file as hidden (FILE_ATTRIBUTE_HIDDEN = 0x2) and system (FILE_ATTRIBUTE_SYSTEM = 0x4)
+        // This provides minimal obfuscation but no real security
+        use std::os::windows::fs::OpenOptionsExt;
+        options.attributes(0x2 | 0x4); // FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM
+        
+        // Note: We intentionally do not use custom_flags() here as that sets dwFileFlags,
+        // not dwFileAttributes. The attributes() method correctly sets dwFileAttributes
+        // which is what controls file visibility and basic attributes on Windows.
+        
+        // For production use on Windows, consider implementing proper ACL-based security
+        // or documenting that sensitive files should be stored in encrypted containers
+        // or on encrypted filesystems for true security.
     }
 
     #[cfg(not(any(unix, windows)))]
