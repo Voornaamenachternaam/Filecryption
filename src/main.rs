@@ -149,7 +149,7 @@ fn encrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
 }
 
 fn decrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
-    if !path.extension().is_some_and(|e| e == "enc") {
+    if path.extension().is_none_or(|e| e != "enc") {
         return Ok(());
     }
 
