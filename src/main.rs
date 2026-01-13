@@ -93,9 +93,11 @@ fn encrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
         return Ok(());
     }
 
-    let out_path = path.with_extension(format!(
-        "{}.enc",
-        path.extension().and_then(|e| e.to_str()).unwrap_or("")
+    let out_path = {
+    let mut p = path.as_os_str().to_owned();
+    p.push(".enc");
+    PathBuf::from(p)
+};
     ));
 
     let mut salt = [0u8; 16];
