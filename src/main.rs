@@ -31,7 +31,7 @@ const MIN_ITERATIONS: u32 = 10; // Minimum iterations for security
 const DEFAULT_MEMORY_KB: u32 = 4096; // 4MB default
 
 #[derive(Parser, Debug)]
-#[command(author, version, about = "Filecryption (streaming main.rs)")]
+#[command(name = "filecryption", author, version, about = "File encryption/decryption tool using Argon2 and XChaCha20Poly1305")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
