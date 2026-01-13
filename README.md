@@ -10,22 +10,20 @@ Allows encryption and decryption of files using Argon2i and XChaCha20Poly1305 in
 * Enjoy :+1:
 ```
 
-Allows encryption and decryption of files using Argon2 and XChaCha20Poly1305
+File encryption/decryption tool using Argon2 and XChaCha20Poly1305
 
-Usage: filecryption [OPTIONS] <ACTION> [FILE]...
+Usage: filecryption <COMMAND>
 
-Arguments:
-  <ACTION>   [possible values: encrypt, decrypt, compute]
-  [FILE]...  File(s)/Directories to encrypt/decrypt
+Commands:
+  encrypt      Encrypt a file (writes <filename>_encrypted)
+  decrypt      Decrypt a file produced by this tool
+  encrypt-dir  Recursively encrypt all files in a directory (non-hidden)
+  decrypt-dir  Recursively decrypt a directory produced by EncryptDir
+  help         Print this message or the help of the given subcommand(s)
 
 Options:
-  -a, --argon2 <ARGON2>      Argon parameter (default should be fit, but can be computed with -t), set exponential for argon, must be between 5 (very low - low CPU devices) and 50 (nearly impossible to compute) [default: 16]
-  -f, --filename             Encrypt filename
-  -p, --password <PASSWORD>  Password input
-  -r, --recursive            Recursive all directories and files
-  -v, --verbose              verbose mode
-  -h, --help                 Print help
-  -V, --version              Print version
+  -h, --help     Print help
+  -V, --version  Print version
 
 ```
 
@@ -37,11 +35,11 @@ Options:
 
 
 Example :
-* `./script encrypt file.txt` to encrypt file.txt
-* `./script decrypt file.txt` to decrypt file.txt
-* `./script -f decrypt file.txt` to decrypt file.txt and its filename
-* `./script -frv encrypt ~` to encrypt and verbose full home and its filename
-* `./script -frv encrypt ~` to decrypt and verbose full home and its filename
+* `filecryption encrypt file.txt` to encrypt file.txt
+* `filecryption decrypt file.txt_encrypted` to decrypt file.txt_encrypted
+* `filecryption encrypt-dir ~/documents` to recursively encrypt all files in ~/documents
+* `filecryption decrypt-dir ~/documents` to recursively decrypt all files in ~/documents
+* `filecryption --help` to show help information
 
 ## Informations
 

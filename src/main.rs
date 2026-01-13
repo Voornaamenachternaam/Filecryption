@@ -31,7 +31,8 @@ const MIN_ITERATIONS: u32 = 10; // Minimum iterations for security
 const DEFAULT_MEMORY_KB: u32 = 4096; // 4MB default
 
 #[derive(Parser, Debug)]
-#[command(author, version, about = "Filecryption (streaming main.rs)")]
+#[command(name = "filecryption", author, version, about = "File encryption/decryption tool using Argon2 and XChaCha20Poly1305")]
+#[command(arg_required_else_help = true)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -40,22 +41,32 @@ struct Cli {
 #[derive(Subcommand, Debug)]
 enum Commands {
     /// Encrypt a file (writes <filename>_encrypted)
-    Encrypt {
+    Encrypt { 
         /// Input file to encrypt
+        #[arg(help = "Path to the file to encrypt")]
         file: PathBuf,
     },
 
     /// Decrypt a file produced by this tool
     Decrypt {
         /// Input file to decrypt (should have nonce + chunked ciphertext)
+        #[arg(help = "Path to the file to decrypt")]
         file: PathBuf,
     },
 
     /// Recursively encrypt all files in a directory (non-hidden)
-    EncryptDir { dir: PathBuf },
+    EncryptDir { 
+        /// Directory to encrypt recursively
+        #[arg(help = "Path to the directory to encrypt")]
+        dir: PathBuf 
+    },
 
     /// Recursively decrypt a directory produced by EncryptDir
-    DecryptDir { dir: PathBuf },
+    DecryptDir { 
+        /// Directory to decrypt recursively
+        #[arg(help = "Path to the directory to decrypt")]
+        dir: PathBuf 
+    },
 }
 
 /// Secure password wrapper that zeroizes on drop
