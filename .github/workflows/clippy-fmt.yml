@@ -27,7 +27,6 @@ jobs:
       with:
         toolchain: stable
         components: clippy, rustfmt
-    - uses: Swatinem/rust-cache@v2.8.2
     - name: clippy
       run: cargo clippy --workspace --all-targets --all-features -- -D warnings -A clippy::literal_string_with_formatting_args
     - name: fmt
