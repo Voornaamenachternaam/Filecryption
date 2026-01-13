@@ -8,7 +8,7 @@ use std::process::exit;
 use clap::{Parser, Subcommand};
 use orion::hazardous::aead::xchacha20poly1305::{self, Nonce, SecretKey as OrionSecretKey};
 use orion::kdf::{self, Password, Salt as OrionSalt};
-use rand::{rng, RngCore};
+use rand::{rngs::OsRng, RngCore};
 use rpassword::read_password;
 use zeroize::Zeroizing;
 
