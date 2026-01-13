@@ -125,8 +125,7 @@ fn encrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
         if n == 0 {
             let tag = enc.finish(&[], &mut output)?;
             output.write_all(&tag)?;
-            break;
-        }
+            enc.seal_chunk(&buffer[..n], &mut output)?;
         let tag = enc.seal_chunk(&buffer[..n], &mut output)?;
         output.write_all(&tag)?;
     }
