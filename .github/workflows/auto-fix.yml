@@ -2,10 +2,8 @@ name: try-auto-fix
 
 on: 
   push:
-    branches: [ "main" ]
   pull_request:
-    branches: [ "main" ]
-  workflow_dispatch: {}  # Allows manual trigger from GitHub Actions UI
+  workflow_dispatch: {}
   schedule:
     - cron: "0 2 * * *"
 
