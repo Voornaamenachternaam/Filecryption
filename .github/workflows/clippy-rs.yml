@@ -13,9 +13,7 @@ on:
   push:
   pull_request:
   workflow_dispatch: {}
-  schedule:
-    - cron: "0 5 * * *"
-
+  
 jobs:
   clippy_check:
     runs-on: ubuntu-latest
