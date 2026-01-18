@@ -8,7 +8,7 @@ use rand::rngs::StdRng;
 use rand::{SeedableRng, TryRngCore};
 use rpassword::read_password;
 use zeroize::Zeroizing;
-use argon2::{argon2i, Config};
+use argon2::{argon2id, Config};
 
 use orion::hazardous::aead::xchacha20poly1305::{self, Nonce, SecretKey as OrionSecretKey};
 
