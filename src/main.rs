@@ -265,7 +265,7 @@ fn derive_key(password: &Zeroizing<String>, salt: &[u8]) -> io::Result<OrionSecr
     let argon2 = argon2id(&cfg);
     let raw_key = argon2
         .hash_raw(password.as_bytes(), salt)
-        .map_err(|e| io::Error::new(ErrorKind::InvalidData, format!("Argon2 error: {e}"))?;
+        .map_err(|e| io::Error::new(ErrorKind::InvalidData, format!("Argon2 error: {e}")))?;
     let secret_key = OrionSecretKey::from_slice(&raw_key)
         .map_err(|_| io::Error::new(ErrorKind::InvalidData, "Key cast failure"))?;
     // zero out the temporary buffer
