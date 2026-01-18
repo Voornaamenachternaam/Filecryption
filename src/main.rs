@@ -4,11 +4,11 @@ use std::path::{Path, PathBuf};
 use std::process::exit;
 
 use clap::{Parser, Subcommand};
-use rand::rngs::thread_rng;
-use rand::RngCore;
+use rand::thread_rng;
 use rpassword::read_password;
 use zeroize::Zeroizing;
 use argon2::{argon2id, Config, Flags};
+
 use orion::hazardous::aead::xchacha20poly1305::{self, Nonce, SecretKey as OrionSecretKey};
 
 const MAGIC: &[u8; 8] = b"FCRYPT01";
@@ -16,9 +16,29 @@ const SALT_LEN: usize = 16;
 const NONCE_LEN: usize = 24;
 const TAG_LEN: usize = 16;
 const CHUNK_SIZE: usize = 64 * 1024;
-const MEMORY_COST: u32 = 1 << 20;
+const MEMORY_COST: u32 = 1 << 20; // 2^20 KiB = 1 GiB
 const TIME_COST: u32 = 10;
 const PARALLELISM: u32 = 1;
+
+/// RAII handle that creates a temporary file and removes it on drop.
+struct TempFile {
+    file: File,
+    path: PathBuf,
+}
+impl TempFile {
+    fn create(path: &Path) -> io::Result<Self> {
+        let file = File::create(path)?;
+        Ok(TempFile {
+            file,
+            path: path.to_path_buf(),
+        })
+    }
+}
+impl Drop for TempFile {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
 
 #[derive(Parser)]
 #[command(
@@ -39,25 +59,6 @@ enum Command {
     Decrypt { file: PathBuf },
     EncryptDir { dir: PathBuf },
     DecryptDir { dir: PathBuf },
-}
-
-struct TempFile {
-    file: File,
-    path: PathBuf,
-}
-impl TempFile {
-    fn create(path: &Path) -> io::Result<Self> {
-        let file = File::create(path)?;
-        Ok(TempFile {
-            file,
-            path: path.to_path_buf(),
-        })
-    }
-}
-impl Drop for TempFile {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.path);
-    }
 }
 
 fn main() {
@@ -135,7 +136,7 @@ fn encrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
     let mut tmp_path = out_path.clone();
     tmp_path.set_extension("tmp");
 
-    // Random salt and base nonce
+    // random salt and base nonce
     let mut salt = [0u8; SALT_LEN];
     let mut base_nonce = [0u8; NONCE_LEN];
     thread_rng().fill_bytes(&mut salt);
@@ -144,20 +145,20 @@ fn encrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
     let key = derive_key(password, &salt)?;
     let mut cur_nonce = base_nonce;
 
-    // Open input file
-    let mut input = File::open(path)?;
+    // open input file
+    let input = File::open(path)?;
     let mut reader = BufReader::new(input);
 
-    // Create temporary output file
+    // create temporary output file
     let mut tmp_file = TempFile::create(&tmp_path)?;
     let mut writer = BufWriter::new(&mut tmp_file.file);
 
-    // Write header
+    // write header
     writer.write_all(MAGIC)?;
     writer.write_all(&salt)?;
     writer.write_all(&base_nonce)?;
 
-    // Buffer for reading plaintext
+    // encrypt chunks
     let mut buffer = Zeroizing::new(vec![0u8; CHUNK_SIZE]);
     loop {
         let n = reader.read(&mut buffer)?;
@@ -175,7 +176,7 @@ fn encrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
 
     writer.flush()?;
     drop(writer);
-    drop(tmp_file); // Ensure .tmp is removed
+    drop(tmp_file); // removes the .tmp file
 
     fs::rename(&tmp_path, &out_path)?;
     Ok(())
@@ -232,7 +233,7 @@ fn decrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
 
     writer.flush()?;
     drop(writer);
-    drop(tmp_file); // Remove .tmp file
+    drop(tmp_file); // removes the .tmp file
 
     fs::rename(&tmp_path, &out_path)?;
     Ok(())
@@ -264,9 +265,10 @@ fn derive_key(password: &Zeroizing<String>, salt: &[u8]) -> io::Result<OrionSecr
     let argon2 = argon2id(&cfg);
     let raw_key = argon2
         .hash_raw(password.as_bytes(), salt)
-        .map_err(|e| io::Error::new(ErrorKind::InvalidData, format!("Argon2 error: {e}")))?;
+        .map_err(|e| io::Error::new(ErrorKind::InvalidData, format!("Argon2 error: {e}"))?;
     let secret_key = OrionSecretKey::from_slice(&raw_key)
         .map_err(|_| io::Error::new(ErrorKind::InvalidData, "Key cast failure"))?;
+    // zero out the temporary buffer
     for b in raw_key.iter_mut() {
         *b = 0;
     }
