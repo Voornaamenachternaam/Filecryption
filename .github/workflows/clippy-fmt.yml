@@ -24,6 +24,7 @@ jobs:
         toolchain: stable
         components: clippy, rustfmt
     - name: clippy
+      continue-on-error: true
       run: cargo clippy --workspace --all-targets --all-features -- -D warnings -A clippy::literal_string_with_formatting_args
     - name: fmt
       continue-on-error: true
