@@ -49,7 +49,13 @@ impl Drop for TempFile {
 }
 
 #[derive(Parser)]
-#
+#[command(
+    name = "filecryption",
+    version,
+    about = "Secure file encryption using Argon2id + XChaCha20-Poly1305",
+    subcommand_required = true,
+    arg_required_else_help = true
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
