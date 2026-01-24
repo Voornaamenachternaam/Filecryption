@@ -24,6 +24,7 @@ jobs:
           override: true
 
       - name: Cache cargo registry & target
+        continue-on-error: true
         uses: actions/cache@v5.0.2
         with:
           path: |
@@ -33,20 +34,24 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Run initial build & tests
+        continue-on-error: true
         run: |
           cargo test --workspace
 
       - name: Try cargo fix (compiler fixes)
+        continue-on-error: true
         run: |
           cargo fix --workspace --allow-dirty --allow-staged || true
 
       - name: Try clippy auto-fixes
+        continue-on-error: true
         run: |
           cargo clippy --all-targets --all-features --workspace --fix --allow-dirty --allow-staged || true
 
       - name: Run rustfmt
+        continue-on-error: true
         run: |
-          cargo fmt --all
+          cargo fmt --all --check
 
       - name: Re-run tests
         run: |
