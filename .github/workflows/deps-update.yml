@@ -3,8 +3,8 @@ name: Dependency Update
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 3 * * *" # weekly Monday 03:00 UTC
-
+    - cron: "0 3 * * *" 
+    
 permissions:
   issues: write
   pull-requests: write
@@ -72,7 +72,7 @@ jobs:
       - name: Create PR for dependency updates (if changes)
         if: env.changes == 'true'
         id: pr_deps
-        uses: peter-evans/create-pull-request@v8
+        uses: peter-evans/create-pull-request@v8.1.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           commit-message: "chore(ci): upgrade dependencies"
@@ -114,7 +114,7 @@ jobs:
       - name: Create PR for diagnostics (if build failures but no code changes)
         if: env.failed_count != '0' && env.changes != 'true'
         id: pr_diag
-        uses: peter-evans/create-pull-request@v8
+        uses: peter-evans/create-pull-request@v8.1.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           commit-message: "chore(ci): diagnostic - dependency update build failures"
