@@ -22,10 +22,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout repository (default branch)
         uses: actions/checkout@v6.0.1
+        with:
+          fetch-depth: 0
 
-      # 2️⃣ Install Rust toolchain and Clippy (replaces dtolnay/rust-toolchain)
       - name: Install Rust toolchain and Clippy
         uses: actions-rust-lang/setup-rust-toolchain@v1.15.2
         with:
@@ -38,67 +39,99 @@ jobs:
           latest_version=$(rustc --version | awk '{print $2}')
           echo "latest_version=$latest_version" >> $GITHUB_ENV
 
+          # per your instruction: 2024 is the current edition
           latest_edition="2024"
           echo "latest_edition=$latest_edition" >> $GITHUB_ENV
 
           echo "Fetched latest_version: $latest_version and latest_edition: $latest_edition"
 
-      - name: Find and update Cargo.toml files
-        id: update
+      - name: Update Cargo.toml files using tomlkit (TOML-aware)
+        id: toml_update
         run: |
-          changes_made=false
-          echo "Latest version: $latest_version"
-          echo "Latest edition: $latest_edition"
-          
-          # Find all Cargo.toml files in the repo (root and subfolders)
-          for file in $(find . -name "Cargo.toml"); do
-            echo "Processing $file"
-            
-            # Extract current values from the file
-            current_version=$(grep 'rust-version' "$file" | awk -F'"' '{print $2}')
-            current_edition=$(grep 'edition' "$file" | awk -F'"' '{print $2}')
-            
-            # Update rust-version if the latest version is newer
-            if [ "$(printf '%s\n' "$latest_version" "$current_version" | sort -V | tail -n1)" != "$current_version" ]; then
-              sed -i "s/rust-version = \".*\"/rust-version = \"$latest_version\"/g" "$file"
-              changes_made=true
-              echo "Updated rust-version in $file"
-            fi
-            
-            # Update edition if it differs from the latest edition
-            if [ "$latest_edition" != "$current_edition" ]; then
-              sed -i "s/edition = \".*\"/edition = \"$latest_edition\"/g" "$file"
-              changes_made=true
-              echo "Updated edition in $file"
-            fi
-          done
-          
-          if [ "$changes_made" = true ]; then
-            git config --global user.name "github-actions"
-            git config --global user.email "github-actions@github.com"
-            git checkout -B update-cargo-toml
-            git commit -am "Update Cargo.toml files: rust-version and/or edition"
-            echo "changes_made=true" >> $GITHUB_ENV
-          else
-            echo "changes_made=false" >> $GITHUB_ENV
-            echo "No updates needed for any Cargo.toml files"
-          fi
+          python - <<'PY'
+          import os, sys, subprocess
+          from pathlib import Path
 
-      - name: Push changes if any
-        if: env.changes_made == 'true'
-        uses: ad-m/github-push-action@v1.0.0
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          branch: update-cargo-toml
+          # Ensure tomlkit is available (install if necessary)
+          try:
+              import tomlkit
+          except Exception:
+              subprocess.check_call([sys.executable, "-m", "pip", "install", "tomlkit"])
+              import tomlkit
 
-      - name: Create pull request if needed
+          latest_version = os.environ.get("latest_version")
+          latest_edition = os.environ.get("latest_edition")
+
+          if not latest_version or not latest_edition:
+              print("Environment variables latest_version or latest_edition missing", file=sys.stderr)
+              sys.exit(1)
+
+          changed_files = []
+
+          for p in Path(".").rglob("Cargo.toml"):
+              try:
+                  text = p.read_text(encoding="utf-8")
+              except Exception as e:
+                  print(f"Skipping {p}: cannot read ({e})")
+                  continue
+
+              try:
+                  doc = tomlkit.parse(text)
+              except Exception as e:
+                  print(f"Skipping {p}: parse error ({e})")
+                  continue
+
+              # Only modify files that declare a [package] table
+              if "package" not in doc:
+                  print(f"Skipping {p}: no [package] table")
+                  continue
+
+              pkg = doc["package"]
+              file_changed = False
+
+              # Enforce rust-version as a string
+              current_rv = pkg.get("rust-version")
+              if current_rv != latest_version:
+                  pkg["rust-version"] = latest_version
+                  file_changed = True
+
+              # Enforce edition (tomlkit will render as string)
+              current_ed = pkg.get("edition")
+              # Convert existing edition to string for robust comparison
+              if current_ed is None or str(current_ed) != str(latest_edition):
+                  pkg["edition"] = str(latest_edition)
+                  file_changed = True
+
+              if file_changed:
+                  # Write back preserving TOML structure/comments
+                  p.write_text(tomlkit.dumps(doc), encoding="utf-8")
+                  changed_files.append(str(p))
+
+          if changed_files:
+              print("Modified files:", changed_files)
+              # communicate result to GitHub Actions
+              with open(os.environ["GITHUB_ENV"], "a") as f:
+                  f.write("changes_made=true\n")
+          else:
+              print("No Cargo.toml updates required")
+              with open(os.environ["GITHUB_ENV"], "a") as f:
+                  f.write("changes_made=false\n")
+          PY
+
+      - name: Create pull request (if changes were made)
         if: env.changes_made == 'true'
         uses: peter-evans/create-pull-request@v8.1.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          branch: update-cargo-toml
-          title: Update Cargo.toml files
+          branch: cargo-rust-auto-update
+          base: ${{ github.event.repository.default_branch }}
+          title: "Enforce latest Rust version and edition in Cargo.toml"
           body: |
-            This pull request updates all Cargo.toml files in the repository with the latest:
-            - `rust-version` (if a newer stable version is available)
-            - `edition` (if a newer edition is available)
+            This automated PR strictly enforces the following in ALL Cargo.toml files:
+
+            - rust-version = ${{ env.latest_version }}
+            - edition = ${{ env.latest_edition }}
+
+            The PR is generated automatically by the workflow and will be updated on subsequent runs.
+          commit-message: "Enforce latest Rust version (${{ env.latest_version }}) and edition (${{ env.latest_edition }}) in Cargo.toml files"
+          delete-branch: true
