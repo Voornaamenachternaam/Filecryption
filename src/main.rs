@@ -1,23 +1,52 @@
-#![forbid(unsafe_code)]
-
 use std::fs::{self, File};
-use std::io::{self, Read, Write, BufReader, BufWriter};
+use std::io::{self, Read, Write, BufReader, BufWriter, ErrorKind};
 use std::path::{Path, PathBuf};
 use std::process::exit;
 
 use clap::{Parser, Subcommand};
-use orion::hazardous::aead::xchacha20poly1305::{self, Nonce, SecretKey as OrionSecretKey};
-use orion::kdf::{self, Password, Salt as OrionSalt};
-use rand::TryRngCore; // RIGOROUS FIX: Required trait for try_fill_bytes in rand 0.9+
-use rpassword::read_password;
+use rand::RngCore;
+use rpassword::prompt_password;
 use zeroize::Zeroizing;
+use argon2::{Argon2, Algorithm, Version, Params};
 
-// --- CRYPTOGRAPHIC SPECIFICATIONS ---
+use orion::hazardous::aead::xchacha20poly1305::{self, Nonce, SecretKey as OrionSecretKey};
+
 const MAGIC: &[u8; 8] = b"FCRYPT01";
 const SALT_LEN: usize = 16;
 const NONCE_LEN: usize = 24;
 const TAG_LEN: usize = 16;
-const CHUNK_SIZE: usize = 64 * 1024; // 64KB chunks for optimal streaming
+const CHUNK_SIZE: usize = 64 * 1024;
+const MEMORY_COST: u32 = 1 << 20; // 2^20 KiB = 1 GiB
+const TIME_COST: u32 = 10;
+const PARALLELISM: u32 = 1;
+
+/// RAII handle for temporary files that ensures cleanup on failure but allows persistence on success.
+struct TempFile {
+    path: PathBuf,
+    active: bool,
+}
+
+impl TempFile {
+    fn create(path: &Path) -> io::Result<Self> {
+        File::create(path)?;
+        Ok(TempFile {
+            path: path.to_path_buf(),
+            active: true,
+        })
+    }
+
+    fn persist(mut self) {
+        self.active = false;
+    }
+}
+
+impl Drop for TempFile {
+    fn drop(&mut self) {
+        if self.active {
+            let _ = fs::remove_file(&self.path);
+        }
+    }
+}
 
 #[derive(Parser)]
 #[command(
@@ -32,15 +61,15 @@ struct Cli {
     command: Command,
 }
 
-#[derive(Subcommand)]
+#
 enum Command {
-    /// Encrypt a single file
+    /// Encrypt a single file.
     Encrypt { file: PathBuf },
-    /// Decrypt a previously encrypted file
+    /// Decrypt a single file.
     Decrypt { file: PathBuf },
-    /// Recursively encrypt a directory
+    /// Recursively encrypt all files in a directory.
     EncryptDir { dir: PathBuf },
-    /// Recursively decrypt a directory
+    /// Recursively decrypt all files in a directory.
     DecryptDir { dir: PathBuf },
 }
 
@@ -49,107 +78,114 @@ fn main() {
 
     match cli.command {
         Command::Encrypt { file } => {
-            let pw = prompt_password(true);
-            encrypt_file(&file, &pw).unwrap_or_exit("Encryption failed");
+            let pw = prompt_password_secure(true).unwrap_or_exit("Password prompt failed");
+            encrypt_file(&file, &pw).unwrap_or_exit("Encryption process terminated");
         }
         Command::Decrypt { file } => {
-            let pw = prompt_password(false);
-            decrypt_file(&file, &pw).unwrap_or_exit("Decryption failed");
+            let pw = prompt_password_secure(false).unwrap_or_exit("Password prompt failed");
+            decrypt_file(&file, &pw).unwrap_or_exit("Decryption process terminated");
         }
         Command::EncryptDir { dir } => {
-            let pw = prompt_password(true);
-            walk_dir(&dir, &pw, true).unwrap_or_exit("Directory encryption failed");
+            let pw = prompt_password_secure(true).unwrap_or_exit("Password prompt failed");
+            walk_dir(&dir, &pw, true).unwrap_or_exit("Directory encryption terminated");
         }
         Command::DecryptDir { dir } => {
-            let pw = prompt_password(false);
-            walk_dir(&dir, &pw, false).unwrap_or_exit("Directory decryption failed");
+            let pw = prompt_password_secure(false).unwrap_or_exit("Password prompt failed");
+            walk_dir(&dir, &pw, false).unwrap_or_exit("Directory decryption terminated");
         }
     }
 }
 
-fn prompt_password(confirm: bool) -> Zeroizing<String> {
-    print!("Password: ");
-    io::stdout().flush().expect("Failed to flush stdout");
-    let pw = read_password().expect("Failed to read password");
-
+fn prompt_password_secure(confirm: bool) -> io::Result<Zeroizing<String>> {
+    let pw = prompt_password("Enter Master Password: ")?;
+    if pw.len() < 12 {
+        eprintln!("Security Error: Password must be at least 12 characters.");
+        exit(1);
+    }
     if confirm {
-        print!("Confirm password: ");
-        io::stdout().flush().expect("Failed to flush stdout");
-        let confirm_pw = read_password().expect("Failed to read password");
-        if pw != confirm_pw {
-            eprintln!("Error: Passwords do not match");
+        let confirm_pw = prompt_password("Confirm Master Password: ")?;
+        if pw!= confirm_pw {
+            eprintln!("Security Error: Passwords do not match.");
             exit(1);
         }
     }
-    Zeroizing::new(pw)
+    Ok(Zeroizing::new(pw))
 }
 
-/// Increment the nonce (Big-Endian) to ensure block uniqueness across the stream.
 fn increment_nonce(nonce: &mut [u8; NONCE_LEN]) {
     for byte in nonce.iter_mut().rev() {
-        *byte = byte.wrapping_add(1);
-        if *byte != 0 {
+        let (val, overflow) = byte.overflowing_add(1);
+        *byte = val;
+        if!overflow {
             break;
         }
     }
 }
 
 fn encrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
-    if path.extension().is_some_and(|e| e == "enc" || e == "tmp") {
-        return Ok(());
+    if let Some(ext) = path.extension() {
+        if ext == "enc" |
+
+| ext == "tmp" {
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                "File already possesses an.enc or.tmp extension",
+            ));
+        }
     }
 
     let out_path = path.with_extension("enc");
-    let mut tmp_path = out_path.clone();
-    tmp_path.set_extension("tmp");
+    let tmp_path = out_path.with_extension("tmp");
 
-    let mut salt = [0u8; SALT_LEN];
+    let mut salt =;
     let mut base_nonce = [0u8; NONCE_LEN];
-    
-    // RIGOROUS AUDIT: Using TryRngCore::try_fill_bytes to ensure entropy is valid.
     let mut rng = rand::rng();
-    rng.try_fill_bytes(&mut salt).map_err(io::Error::other)?;
-    rng.try_fill_bytes(&mut base_nonce).map_err(io::Error::other)?;
+    rng.fill_bytes(&mut salt);
+    rng.fill_bytes(&mut base_nonce);
 
     let key = derive_key(password, &salt)?;
-    let mut current_nonce_bytes = base_nonce;
+    let mut cur_nonce = base_nonce;
 
     let input = File::open(path)?;
     let mut reader = BufReader::new(input);
+
+    let tmp_file_handler = TempFile::create(&tmp_path)?;
     let output = File::create(&tmp_path)?;
     let mut writer = BufWriter::new(output);
 
-    // Header: Magic(8) | Salt(16) | BaseNonce(24)
     writer.write_all(MAGIC)?;
     writer.write_all(&salt)?;
     writer.write_all(&base_nonce)?;
 
-    let mut buffer = Zeroizing::new(vec![0u8; CHUNK_SIZE]);
+    let mut buffer = vec!;
     loop {
         let n = reader.read(&mut buffer)?;
-        if n == 0 { break; }
+        if n == 0 {
+            break;
+        }
 
-        let nonce = Nonce::from_slice(&current_nonce_bytes)
-            .map_err(|_| io::Error::other("Nonce construction error"))?;
+        let nonce = Nonce::from_slice(&cur_nonce)
+           .map_err(|_| io::Error::new(ErrorKind::Other, "Orion nonce state corruption"))?;
         
-        let mut output_chunk = vec![0u8; n + TAG_LEN];
-        xchacha20poly1305::seal(&key, &nonce, &buffer[..n], None, &mut output_chunk)
-            .map_err(|_| io::Error::other("Cryptographic seal failure"))?;
-
-        writer.write_all(&output_chunk)?;
-        increment_nonce(&mut current_nonce_bytes);
+        let mut out_chunk = vec!;
+        xchacha20poly1305::seal(&key, &nonce, &buffer[..n], None, &mut out_chunk)
+           .map_err(|_| io::Error::new(ErrorKind::Other, "AEAD seal failure: buffer overflow or logic error"))?;
+        
+        writer.write_all(&out_chunk)?;
+        increment_nonce(&mut cur_nonce);
     }
 
     writer.flush()?;
     drop(writer);
     
-    // Atomic move ensures file safety on both Windows 11 and Linux.
     fs::rename(&tmp_path, &out_path)?;
+    tmp_file_handler.persist();
+
     Ok(())
 }
 
 fn decrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
-    if path.extension().is_none_or(|e| e != "enc") {
+    if path.extension().and_then(|s| s.to_str())!= Some("enc") {
         return Ok(());
     }
 
@@ -158,54 +194,59 @@ fn decrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
 
     let mut magic = [0u8; 8];
     reader.read_exact(&mut magic)?;
-    if &magic != MAGIC {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "Invalid file format"));
+    if &magic!= MAGIC {
+        return Err(io::Error::new(ErrorKind::InvalidData, "Invalid file format: MAGIC header mismatch"));
     }
 
-    let mut salt = [0u8; SALT_LEN];
+    let mut salt =;
     let mut base_nonce = [0u8; NONCE_LEN];
     reader.read_exact(&mut salt)?;
     reader.read_exact(&mut base_nonce)?;
 
     let key = derive_key(password, &salt)?;
-    let mut current_nonce_bytes = base_nonce;
+    let mut cur_nonce = base_nonce;
 
     let out_path = path.with_extension("");
-    let mut tmp_path = out_path.clone();
-    tmp_path.set_extension("tmp");
+    let tmp_path = out_path.with_extension("tmp");
 
+    let tmp_file_handler = TempFile::create(&tmp_path)?;
     let output = File::create(&tmp_path)?;
     let mut writer = BufWriter::new(output);
 
-    let mut buffer = Zeroizing::new(vec![0u8; CHUNK_SIZE + TAG_LEN]);
+    let mut buffer = vec!;
     loop {
         let n = reader.read(&mut buffer)?;
-        if n == 0 { break; }
-
+        if n == 0 {
+            break;
+        }
         if n < TAG_LEN {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "Truncated block"));
+            return Err(io::Error::new(ErrorKind::InvalidData, "Ciphertext integrity error: truncated chunk"));
         }
 
-        let nonce = Nonce::from_slice(&current_nonce_bytes)
-            .map_err(|_| io::Error::other("Nonce construction error"))?;
-
-        let mut plaintext = vec![0u8; n - TAG_LEN];
+        let nonce = Nonce::from_slice(&cur_nonce)
+           .map_err(|_| io::Error::new(ErrorKind::Other, "Orion nonce state corruption"))?;
+        
+        let mut plaintext = vec!;
         xchacha20poly1305::open(&key, &nonce, &buffer[..n], None, &mut plaintext)
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Auth failure: invalid password or data tampered"))?;
-
+           .map_err(|_| io::Error::new(ErrorKind::InvalidData, "Authentication failure: data tampered or incorrect password"))?;
+        
         writer.write_all(&plaintext)?;
-        increment_nonce(&mut current_nonce_bytes);
+        increment_nonce(&mut cur_nonce);
     }
 
     writer.flush()?;
     drop(writer);
+
     fs::rename(&tmp_path, &out_path)?;
+    tmp_file_handler.persist();
+
     Ok(())
 }
 
 fn walk_dir(dir: &Path, pw: &Zeroizing<String>, encrypt: bool) -> io::Result<()> {
-    if !dir.is_dir() { return Ok(()); }
-    
+    if!dir.is_dir() {
+        return Ok(());
+    }
     for entry in fs::read_dir(dir)? {
         let path = entry?.path();
         if path.is_dir() {
@@ -219,19 +260,18 @@ fn walk_dir(dir: &Path, pw: &Zeroizing<String>, encrypt: bool) -> io::Result<()>
     Ok(())
 }
 
-/// Derive a secure key using Argon2id
 fn derive_key(password: &Zeroizing<String>, salt: &[u8]) -> io::Result<OrionSecretKey> {
-    let pw_wrapper = Password::from_slice(password.as_bytes())
-        .map_err(|_| io::Error::other("Password init error"))?;
-    let salt_wrapper = OrionSalt::from_slice(salt)
-        .map_err(|_| io::Error::other("Salt init error"))?;
+    let params = Params::new(MEMORY_COST, TIME_COST, PARALLELISM, Some(32))
+       .map_err(|e| io::Error::new(ErrorKind::InvalidInput, format!("Argon2 configuration error: {e}")))?;
     
-    // Argon2id configuration (Memory-hard against GPU cracking)
-    let derived_key = kdf::derive_key(&pw_wrapper, &salt_wrapper, 10, 64 * 1024, 1)
-        .map_err(|_| io::Error::other("KDF derivation failed"))?;
-
-    OrionSecretKey::from_slice(derived_key.unprotected_as_bytes())
-        .map_err(|_| io::Error::other("Key cast failure"))
+    let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+    let mut raw_key = Zeroizing::new([0u8; 32]);
+    
+    argon2.hash_password_into(password.as_bytes(), salt, raw_key.as_mut())
+       .map_err(|e| io::Error::new(ErrorKind::Other, format!("Argon2 computation failure: {e}")))?;
+    
+    OrionSecretKey::from_slice(raw_key.as_ref())
+       .map_err(|_| io::Error::new(ErrorKind::Other, "Orion key initialization failed"))
 }
 
 trait ExitOnErr<T> {
@@ -243,9 +283,9 @@ impl<T> ExitOnErr<T> for io::Result<T> {
         match self {
             Ok(v) => v,
             Err(e) => {
-                eprintln!("{msg}: {e}");
+                eprintln!("Critical Fault: {msg} - {e}");
                 exit(1);
             }
         }
     }
-}
+} 

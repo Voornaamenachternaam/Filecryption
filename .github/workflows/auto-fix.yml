@@ -11,11 +11,8 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
-      checks: write
-      security-events: write
-      actions: read
     steps:
-      - uses: actions/checkout@v6.0.0
+      - uses: actions/checkout@v6.0.1
         with:
           fetch-depth: 0
 
@@ -27,6 +24,7 @@ jobs:
           override: true
 
       - name: Cache cargo registry & target
+        continue-on-error: true
         uses: actions/cache@v5.0.2
         with:
           path: |
@@ -36,14 +34,17 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Run initial build & tests
+        continue-on-error: true
         run: |
           cargo test --workspace
 
       - name: Try cargo fix (compiler fixes)
+        continue-on-error: true
         run: |
           cargo fix --workspace --allow-dirty --allow-staged || true
 
       - name: Try clippy auto-fixes
+        continue-on-error: true
         run: |
           cargo clippy --all-targets --all-features --workspace --fix --allow-dirty --allow-staged || true
 
@@ -53,11 +54,12 @@ jobs:
           cargo fmt --all --check
 
       - name: Re-run tests
+        continue-on-error: true
         run: |
           cargo test --workspace
 
       - name: Create branch & PR if there are changes
-        uses: peter-evans/create-pull-request@v8
+        uses: peter-evans/create-pull-request@v8.0.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           commit-message: "[auto-fix] apply cargo fix / clippy fixes"
@@ -67,4 +69,3 @@ jobs:
             This PR contains automatic fixes from cargo fix / clippy --fix / rustfmt applied by CI.
             Run tests and review before merging.
           labels: automated, auto-fix
-

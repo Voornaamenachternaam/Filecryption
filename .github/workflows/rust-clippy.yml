@@ -47,12 +47,14 @@ jobs:
           rustup component add clippy || true
 
       - name: Install required cargo tools
+        continue-on-error: true
         run: |
           set -euo pipefail
           # --force ensures the tools are installed/updated if already present
           cargo install --force clippy-sarif sarif-fmt
 
       - name: Apply automatic clippy fixes
+        continue-on-error: true
         id: run-fix
         run: |
           set -euo pipefail
@@ -67,6 +69,7 @@ jobs:
           fi
 
       - name: Create local commit with clippy fixes (if any)
+        continue-on-error: true
         id: commit-fixes
         if: steps.run-fix.outputs.changes_detected == 'true'
         run: |

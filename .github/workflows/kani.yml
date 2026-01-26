@@ -21,7 +21,7 @@ jobs:
         uses: actions-rs/toolchain@v1.0.7
         continue-on-error: true
         with:
-          toolchain: 1.92.0
+          toolchain: 1.93.0
           override: true
           components: rustfmt, clippy
 

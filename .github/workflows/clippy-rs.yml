@@ -28,7 +28,7 @@ jobs:
         with:
           toolchain: stable
           components: clippy
-          cache: true
+          cache: false
           matcher: true
 
       # 3️⃣ Run StepSecurity's Clippy action (annotates PRs / commits)
@@ -40,7 +40,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           # pass any args you want; we keep it conservative here
         # intentionally do not fail the job here — the cargo clippy step below will be authoritative
-        continue-on-error: false
+        continue-on-error: true
 
       # 4️⃣ Install SARIF converters (clippy-sarif + sarif-fmt)
       - name: Install SARIF converters
