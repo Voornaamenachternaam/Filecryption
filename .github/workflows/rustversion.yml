@@ -1,9 +1,18 @@
-name: Update Rust Version and Edition
+name: Cargo Upgrade and Edition
+
+permissions:
+  contents: write
+  checks: write
+  pull-requests: write
+  security-events: write
+  statuses: write
+  issues: write
+  actions: read 
 
 on:
   schedule:
-    - cron: '0 0 * * *'  # Runs weekly
-  workflow_dispatch: {}  # Allow manual triggering
+    - cron: "30 1 * * *"
+  workflow_dispatch: {}
 
 jobs:
   update-cargo-toml:
@@ -14,7 +23,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v6.0.1
 
       - name: Set up Rust
         uses: actions-rs/toolchain@v1.0.7
@@ -24,11 +33,9 @@ jobs:
 
       - name: Fetch latest Rust version and determine edition
         run: |
-          # Fetch the latest stable Rust version
           latest_version=$(rustc --version | awk '{print $2}')
           echo "latest_version=$latest_version" >> $GITHUB_ENV
 
-          # For now, assume that the latest edition is "2024"
           latest_edition="2024"
           echo "latest_edition=$latest_edition" >> $GITHUB_ENV
 
@@ -84,7 +91,7 @@ jobs:
 
       - name: Create pull request if needed
         if: env.changes_made == 'true'
-        uses: peter-evans/create-pull-request@v8
+        uses: peter-evans/create-pull-request@v8.1.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           branch: update-cargo-toml
