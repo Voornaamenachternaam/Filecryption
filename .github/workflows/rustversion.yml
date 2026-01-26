@@ -39,92 +39,66 @@ jobs:
           latest_version=$(rustc --version | awk '{print $2}')
           echo "latest_version=$latest_version" >> $GITHUB_ENV
 
-          # per your instruction: 2024 is the current edition
           latest_edition="2024"
           echo "latest_edition=$latest_edition" >> $GITHUB_ENV
 
           echo "Fetched latest_version: $latest_version and latest_edition: $latest_edition"
 
-      - name: Update Cargo.toml files using tomlkit (TOML-aware)
-        id: toml_update
+      - name: Strictly update ALL Cargo.toml files
+        id: update
         run: |
-          python - <<'PY'
-          import os, sys, subprocess
-          from pathlib import Path
+          set -euo pipefail
+          changes_made=false
 
-          # Ensure tomlkit is available (install if necessary)
-          try:
-              import tomlkit
-          except Exception:
-              subprocess.check_call([sys.executable, "-m", "pip", "install", "tomlkit"])
-              import tomlkit
+          echo "Enforcing rust-version=$latest_version"
+          echo "Enforcing edition=$latest_edition"
 
-          latest_version = os.environ.get("latest_version")
-          latest_edition = os.environ.get("latest_edition")
+          while IFS= read -r file; do
+            echo "Processing $file"
 
-          if not latest_version or not latest_edition:
-              print("Environment variables latest_version or latest_edition missing", file=sys.stderr)
-              sys.exit(1)
+            # Ensure [package] section exists
+            if ! grep -q '^\[package\]' "$file"; then
+              echo "No [package] section in $file — skipping"
+              continue
+            fi
 
-          changed_files = []
+            # Always enforce rust-version
+            if grep -q '^rust-version\s*=' "$file"; then
+              sed -i "s/^rust-version\s*=.*/rust-version = \"$latest_version\"/" "$file"
+            else
+              sed -i "/^\[package\]/a rust-version = \"$latest_version\"" "$file"
+            fi
 
-          for p in Path(".").rglob("Cargo.toml"):
-              try:
-                  text = p.read_text(encoding="utf-8")
-              except Exception as e:
-                  print(f"Skipping {p}: cannot read ({e})")
-                  continue
+            # Always enforce edition
+            if grep -q '^edition\s*=' "$file"; then
+              sed -i "s/^edition\s*=.*/edition = \"$latest_edition\"/" "$file"
+            else
+              sed -i "/^\[package\]/a edition = \"$latest_edition\"" "$file"
+            fi
 
-              try:
-                  doc = tomlkit.parse(text)
-              except Exception as e:
-                  print(f"Skipping {p}: parse error ({e})")
-                  continue
+            changes_made=true
+          done < <(find . -name "Cargo.toml")
 
-              # Only modify files that declare a [package] table
-              if "package" not in doc:
-                  print(f"Skipping {p}: no [package] table")
-                  continue
+          git config --global user.name "github-actions"
+          git config --global user.email "github-actions@github.com"
 
-              pkg = doc["package"]
-              file_changed = False
+          if ! git diff --quiet; then
+            git add .
+            git commit -m "Enforce latest Rust version ($latest_version) and edition ($latest_edition) in all Cargo.toml files"
+            echo "changes_made=true" >> $GITHUB_ENV
+          else
+            echo "No effective changes detected"
+            echo "changes_made=false" >> $GITHUB_ENV
+          fi
 
-              # Enforce rust-version as a string
-              current_rv = pkg.get("rust-version")
-              if current_rv != latest_version:
-                  pkg["rust-version"] = latest_version
-                  file_changed = True
-
-              # Enforce edition (tomlkit will render as string)
-              current_ed = pkg.get("edition")
-              # Convert existing edition to string for robust comparison
-              if current_ed is None or str(current_ed) != str(latest_edition):
-                  pkg["edition"] = str(latest_edition)
-                  file_changed = True
-
-              if file_changed:
-                  # Write back preserving TOML structure/comments
-                  p.write_text(tomlkit.dumps(doc), encoding="utf-8")
-                  changed_files.append(str(p))
-
-          if changed_files:
-              print("Modified files:", changed_files)
-              # communicate result to GitHub Actions
-              with open(os.environ["GITHUB_ENV"], "a") as f:
-                  f.write("changes_made=true\n")
-          else:
-              print("No Cargo.toml updates required")
-              with open(os.environ["GITHUB_ENV"], "a") as f:
-                  f.write("changes_made=false\n")
-          PY
-
-      - name: Create pull request (if changes were made)
+      - name: Create pull request (single source of truth)
         if: env.changes_made == 'true'
         uses: peter-evans/create-pull-request@v8.1.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           branch: cargo-rust-auto-update
           base: ${{ github.event.repository.default_branch }}
+          delete-branch: true
           title: "Enforce latest Rust version and edition in Cargo.toml"
           body: |
             This automated PR strictly enforces the following in ALL Cargo.toml files:
@@ -132,6 +106,4 @@ jobs:
             - rust-version = ${{ env.latest_version }}
             - edition = ${{ env.latest_edition }}
 
-            The PR is generated automatically by the workflow and will be updated on subsequent runs.
-          commit-message: "Enforce latest Rust version (${{ env.latest_version }}) and edition (${{ env.latest_edition }}) in Cargo.toml files"
-          delete-branch: true
+            This guarantees consistency across all crates and workspaces.
