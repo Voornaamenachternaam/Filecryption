@@ -191,12 +191,12 @@ fn encrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
         }
 
         let nonce = Nonce::from_slice(&cur_nonce)
-            .map_err(|_| io::Error::new(ErrorKind::Other, "Invalid nonce state"))?;
+            .map_err(|_| io::Error::other("Invalid nonce state"))?;
         
         // Create an empty buffer with pre-allocated capacity for the ciphertext + tag.
         let mut ciphertext_chunk = Vec::with_capacity(n + TAG_LEN);
         xchacha20poly1305::seal(&key, &nonce, &plaintext_buffer[..n], None, &mut ciphertext_chunk)
-            .map_err(|_| io::Error::new(ErrorKind::Other, "AEAD seal operation failed"))?;
+            .map_err(|_| io::Error::other("AEAD seal operation failed"))?;
 
         writer.write_all(&ciphertext_chunk)?;
         
@@ -267,7 +267,7 @@ fn decrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
         }
 
         let nonce = Nonce::from_slice(&cur_nonce)
-            .map_err(|_| io::Error::new(ErrorKind::Other, "Invalid nonce state"))?;
+            .map_err(|_| io::Error::other("Invalid nonce state"))?;
         
         // Create an empty buffer with pre-allocated capacity for the plaintext.
         let mut plaintext_chunk = Vec::with_capacity(n - TAG_LEN);
@@ -308,12 +308,10 @@ fn walk_dir(dir: &Path, pw: &Zeroizing<String>, encrypt: bool) -> io::Result<()>
         let path = entry?.path();
         if path.is_dir() {
             walk_dir(&path, pw, encrypt)?; // Propagate errors upwards.
+        } else if encrypt {
+            encrypt_file(&path, pw)?;
         } else {
-            if encrypt {
-                encrypt_file(&path, pw)?;
-            } else {
-                decrypt_file(&path, pw)?;
-            }
+            decrypt_file(&path, pw)?;
         }
     }
     Ok(())
@@ -331,8 +329,8 @@ fn derive_key(password: &Zeroizing<String>, salt: &[u8; SALT_LEN]) -> io::Result
         password.as_bytes(),
         salt,
         raw_key.as_mut(),
-    ).map_err(|e| io::Error::new(ErrorKind::Other, format!("Argon2 key derivation failed: {}", e)))?;
+    ).map_err(|e| io::Error::other(format!("Argon2 key derivation failed: {}", e)))?;
 
     OrionSecretKey::from_slice(raw_key.as_ref())
-        .map_err(|_| io::Error::new(ErrorKind::Other, "Failed to initialize Orion secret key"))
+        .map_err(|_| io::Error::other("Failed to initialize Orion secret key"))
 }
