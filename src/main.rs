@@ -18,8 +18,10 @@ const SALT_LEN: usize = 16;
 const NONCE_LEN: usize = 24;
 /// Length of the Poly1305 authentication tag.
 const TAG_LEN: usize = 16;
-/// Size of the I/O buffer for streaming file operations.
-const CHUNK_SIZE: usize = 64 * 1024;
+/// Size of the plaintext I/O buffer for streaming file operations.
+const PLAINTEXT_CHUNK_SIZE: usize = 64 * 1024;
+/// Size of a ciphertext chunk (plaintext + tag).
+const CIPHERTEXT_CHUNK_SIZE: usize = PLAINTEXT_CHUNK_SIZE + TAG_LEN;
 /// Argon2id memory cost parameter (in KiB).
 const MEMORY_COST: u32 = 1 << 20; // 2^20 KiB = 1 GiB
 /// Argon2id time cost parameter.
@@ -181,11 +183,11 @@ fn encrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
     writer.write_all(&base_nonce)?;
 
     // Use a pre-allocated buffer for efficiency.
-    let mut buffer = vec![0u8; CHUNK_SIZE];
+    let mut plaintext_buffer = vec![0u8; PLAINTEXT_CHUNK_SIZE];
     let mut cur_nonce = base_nonce;
 
     loop {
-        let n = reader.read(&mut buffer)?;
+        let n = reader.read(&mut plaintext_buffer)?;
         if n == 0 {
             break;
         }
@@ -193,8 +195,9 @@ fn encrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
         let nonce = Nonce::from_slice(&cur_nonce)
             .map_err(|_| io::Error::new(ErrorKind::Other, "Invalid nonce state"))?;
         
-        let mut ciphertext_chunk = Vec::with_capacity(n + TAG_LEN);
-        xchacha20poly1305::seal(&key, &nonce, &buffer[..n], None, &mut ciphertext_chunk)
+        // Create a buffer with the exact required size for the ciphertext.
+        let mut ciphertext_chunk = vec![0u8; n + TAG_LEN];
+        xchacha20poly1305::seal(&key, &nonce, &plaintext_buffer[..n], None, &mut ciphertext_chunk)
             .map_err(|_| io::Error::new(ErrorKind::Other, "AEAD seal operation failed"))?;
 
         writer.write_all(&ciphertext_chunk)?;
@@ -249,26 +252,60 @@ fn decrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
     let output = File::create(&tmp_path)?;
     let mut writer = BufWriter::new(output);
 
-    let mut buffer = vec![0u8; CHUNK_SIZE];
+    let mut ciphertext_buffer = vec![0u8; CIPHERTEXT_CHUNK_SIZE];
     loop {
-        let n = reader.read(&mut buffer)?;
-        if n == 0 {
-            break;
+        // Determine how many bytes to read for this chunk.
+        // We try to read a full ciphertext chunk first.
+        let bytes_to_read = CIPHERTEXT_CHUNK_SIZE;
+        let mut total_read = 0;
+        let mut temp_buf = [0u8; CIPHERTEXT_CHUNK_SIZE];
+
+        // `read_exact` will block until it reads the exact number of bytes or EOF.
+        // If we hit EOF before filling the buffer, `read_exact` returns an error.
+        // We handle that to get the final, potentially short, chunk.
+        match reader.read_exact(&mut temp_buf) {
+            Ok(()) => {
+                // Full chunk read.
+                ciphertext_buffer[..bytes_to_read].copy_from_slice(&temp_buf);
+                total_read = bytes_to_read;
+            }
+            Err(ref e) if e.kind() == ErrorKind::UnexpectedEof => {
+                // We've reached the end of the file. Now we need to figure out
+                // how many bytes were actually read into `temp_buf`.
+                // Since `read_exact` failed, we can't rely on it.
+                // Instead, we'll read byte-by-byte until EOF.
+                for b in &mut temp_buf {
+                    match reader.read_exact(std::slice::from_mut(b)) {
+                        Ok(()) => total_read += 1,
+                        Err(ref e) if e.kind() == ErrorKind::UnexpectedEof => break,
+                        Err(e) => return Err(e),
+                    }
+                }
+                if total_read == 0 {
+                    break; // No more data.
+                }
+                if total_read < TAG_LEN {
+                    return Err(io::Error::new(
+                        ErrorKind::InvalidData,
+                        "Final ciphertext chunk is too short for a valid tag.",
+                    ));
+                }
+                ciphertext_buffer[..total_read].copy_from_slice(&temp_buf[..total_read]);
+            }
+            Err(e) => return Err(e),
         }
-        
-        // Ensure there is enough data for a tag.
-        if n < TAG_LEN {
-            return Err(io::Error::new(
-                ErrorKind::InvalidData,
-                "Ciphertext is too short for a valid tag.",
-            ));
+
+        if total_read == 0 {
+            break;
         }
 
         let nonce = Nonce::from_slice(&cur_nonce)
             .map_err(|_| io::Error::new(ErrorKind::Other, "Invalid nonce state"))?;
         
-        let mut plaintext_chunk = Vec::with_capacity(n - TAG_LEN);
-        xchacha20poly1305::open(&key, &nonce, &buffer[..n], None, &mut plaintext_chunk)
+        // Create a buffer for the plaintext. Its size is unknown until after decryption,
+        // but we can pre-allocate based on the ciphertext size.
+        let mut plaintext_chunk = vec![0u8; total_read - TAG_LEN];
+        xchacha20poly1305::open(&key, &nonce, &ciphertext_buffer[..total_read], None, &mut plaintext_chunk)
             .map_err(|_| {
                 io::Error::new(
                     ErrorKind::InvalidData,
@@ -322,14 +359,14 @@ fn derive_key(password: &Zeroizing<String>, salt: &[u8; SALT_LEN]) -> io::Result
         .map_err(|e| io::Error::new(ErrorKind::InvalidInput, format!("Argon2 parameter validation failed: {}", e)))?;
     
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
-    let mut raw_key = [0u8; 32];
+    let mut raw_key = Zeroizing::new([0u8; 32]);
 
     argon2.hash_password_into(
         password.as_bytes(),
         salt,
-        &mut raw_key,
+        raw_key.as_mut(),
     ).map_err(|e| io::Error::new(ErrorKind::Other, format!("Argon2 key derivation failed: {}", e)))?;
 
-    OrionSecretKey::from_slice(&raw_key)
+    OrionSecretKey::from_slice(raw_key.as_ref())
         .map_err(|_| io::Error::new(ErrorKind::Other, "Failed to initialize Orion secret key"))
 }
