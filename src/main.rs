@@ -20,8 +20,6 @@ const NONCE_LEN: usize = 24;
 const TAG_LEN: usize = 16;
 /// Size of the plaintext I/O buffer for streaming file operations.
 const PLAINTEXT_CHUNK_SIZE: usize = 64 * 1024;
-/// Size of a ciphertext chunk (plaintext + tag).
-const CIPHERTEXT_CHUNK_SIZE: usize = PLAINTEXT_CHUNK_SIZE + TAG_LEN;
 /// Argon2id memory cost parameter (in KiB).
 const MEMORY_COST: u32 = 1 << 20; // 2^20 KiB = 1 GiB
 /// Argon2id time cost parameter.
@@ -165,7 +163,7 @@ fn encrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
 
     let mut salt = [0u8; SALT_LEN];
     let mut base_nonce = [0u8; NONCE_LEN];
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng(); // Fixed: Use the non-deprecated `rng()`
     rng.fill_bytes(&mut salt);
     rng.fill_bytes(&mut base_nonce);
 
@@ -182,7 +180,7 @@ fn encrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
     writer.write_all(&salt)?;
     writer.write_all(&base_nonce)?;
 
-    // Use a pre-allocated buffer for efficiency.
+    // Use a pre-allocated buffer for plaintext.
     let mut plaintext_buffer = vec![0u8; PLAINTEXT_CHUNK_SIZE];
     let mut cur_nonce = base_nonce;
 
@@ -193,12 +191,12 @@ fn encrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
         }
 
         let nonce = Nonce::from_slice(&cur_nonce)
-            .map_err(|_| io::Error::other("Invalid nonce state"))?;
+            .map_err(|_| io::Error::new(ErrorKind::Other, "Invalid nonce state"))?;
         
-        // Create a buffer with the exact required size for the ciphertext.
-        let mut ciphertext_chunk = vec![0u8; n + TAG_LEN];
+        // Create an empty buffer with pre-allocated capacity for the ciphertext + tag.
+        let mut ciphertext_chunk = Vec::with_capacity(n + TAG_LEN);
         xchacha20poly1305::seal(&key, &nonce, &plaintext_buffer[..n], None, &mut ciphertext_chunk)
-            .map_err(|_| io::Error::other("AEAD seal operation failed"))?;
+            .map_err(|_| io::Error::new(ErrorKind::Other, "AEAD seal operation failed"))?;
 
         writer.write_all(&ciphertext_chunk)?;
         
@@ -252,60 +250,28 @@ fn decrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
     let output = File::create(&tmp_path)?;
     let mut writer = BufWriter::new(output);
 
-    let mut ciphertext_buffer = vec![0u8; CIPHERTEXT_CHUNK_SIZE];
+    // The ciphertext can be any size, but we know each chunk is at most PLAINTEXT_CHUNK_SIZE + TAG_LEN.
+    let mut ciphertext_buffer = vec![0u8; PLAINTEXT_CHUNK_SIZE + TAG_LEN];
     loop {
-        // Determine how many bytes to read for this chunk.
-        // We try to read a full ciphertext chunk first.
-        let bytes_to_read = CIPHERTEXT_CHUNK_SIZE;
-        let mut total_read = 0;
-        let mut temp_buf = [0u8; CIPHERTEXT_CHUNK_SIZE];
-
-        // `read_exact` will block until it reads the exact number of bytes or EOF.
-        // If we hit EOF before filling the buffer, `read_exact` returns an error.
-        // We handle that to get the final, potentially short, chunk.
-        match reader.read_exact(&mut temp_buf) {
-            Ok(()) => {
-                // Full chunk read.
-                ciphertext_buffer[..bytes_to_read].copy_from_slice(&temp_buf);
-                total_read = bytes_to_read;
-            }
-            Err(ref e) if e.kind() == ErrorKind::UnexpectedEof => {
-                // We've reached the end of the file. Now we need to figure out
-                // how many bytes were actually read into `temp_buf`.
-                // Since `read_exact` failed, we can't rely on it.
-                // Instead, we'll read byte-by-byte until EOF.
-                for b in &mut temp_buf {
-                    match reader.read_exact(std::slice::from_mut(b)) {
-                        Ok(()) => total_read += 1,
-                        Err(ref e) if e.kind() == ErrorKind::UnexpectedEof => break,
-                        Err(e) => return Err(e),
-                    }
-                }
-                if total_read == 0 {
-                    break; // No more data.
-                }
-                if total_read < TAG_LEN {
-                    return Err(io::Error::new(
-                        ErrorKind::InvalidData,
-                        "Final ciphertext chunk is too short for a valid tag.",
-                    ));
-                }
-                ciphertext_buffer[..total_read].copy_from_slice(&temp_buf[..total_read]);
-            }
-            Err(e) => return Err(e),
-        }
-
-        if total_read == 0 {
+        let n = reader.read(&mut ciphertext_buffer)?;
+        if n == 0 {
             break;
+        }
+        
+        // Ensure there is enough data for a tag.
+        if n < TAG_LEN {
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                "Ciphertext is too short for a valid tag.",
+            ));
         }
 
         let nonce = Nonce::from_slice(&cur_nonce)
-            .map_err(|_| io::Error::other("Invalid nonce state"))?;
+            .map_err(|_| io::Error::new(ErrorKind::Other, "Invalid nonce state"))?;
         
-        // Create a buffer for the plaintext. Its size is unknown until after decryption,
-        // but we can pre-allocate based on the ciphertext size.
-        let mut plaintext_chunk = vec![0u8; total_read - TAG_LEN];
-        xchacha20poly1305::open(&key, &nonce, &ciphertext_buffer[..total_read], None, &mut plaintext_chunk)
+        // Create an empty buffer with pre-allocated capacity for the plaintext.
+        let mut plaintext_chunk = Vec::with_capacity(n - TAG_LEN);
+        xchacha20poly1305::open(&key, &nonce, &ciphertext_buffer[..n], None, &mut plaintext_chunk)
             .map_err(|_| {
                 io::Error::new(
                     ErrorKind::InvalidData,
@@ -342,10 +308,12 @@ fn walk_dir(dir: &Path, pw: &Zeroizing<String>, encrypt: bool) -> io::Result<()>
         let path = entry?.path();
         if path.is_dir() {
             walk_dir(&path, pw, encrypt)?; // Propagate errors upwards.
-        } else if encrypt {
-            encrypt_file(&path, pw)?;
         } else {
-            decrypt_file(&path, pw)?;
+            if encrypt {
+                encrypt_file(&path, pw)?;
+            } else {
+                decrypt_file(&path, pw)?;
+            }
         }
     }
     Ok(())
@@ -363,8 +331,8 @@ fn derive_key(password: &Zeroizing<String>, salt: &[u8; SALT_LEN]) -> io::Result
         password.as_bytes(),
         salt,
         raw_key.as_mut(),
-    ).map_err(|e| io::Error::other(format!("Argon2 key derivation failed: {}", e)))?;
+    ).map_err(|e| io::Error::new(ErrorKind::Other, format!("Argon2 key derivation failed: {}", e)))?;
 
     OrionSecretKey::from_slice(raw_key.as_ref())
-        .map_err(|_| io::Error::other("Failed to initialize Orion secret key"))
+        .map_err(|_| io::Error::new(ErrorKind::Other, "Failed to initialize Orion secret key"))
 }
