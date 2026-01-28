@@ -61,7 +61,7 @@ struct Cli {
     command: Command,
 }
 
-#
+#[derive(Subcommand)]
 enum Command {
     /// Encrypt a single file.
     Encrypt { file: PathBuf },
