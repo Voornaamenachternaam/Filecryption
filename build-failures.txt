@@ -1,0 +1,13 @@
+FAILED: .
+       Compiling filecryption v0.9.32 (/home/runner/work/Filecryption/Filecryption)
+    error: expected one of `!` or `[`, found keyword `enum`
+      --> src/main.rs:65:1
+       |
+    64 | #
+       |  - expected one of `!` or `[`
+    65 | enum Command {
+       | ^^^^ unexpected token
+    
+    error: could not compile `filecryption` (bin "filecryption") due to 1 previous error
+    warning: build failed, waiting for other jobs to finish...
+    error: could not compile `filecryption` (bin "filecryption" test) due to 1 previous error
