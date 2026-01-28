@@ -1,5 +1,5 @@
 use std::fs::{self, File};
-use std::io::{self, Read, Write, BufReader, BufWriter, ErrorKind};
+use std::io::{Read, BufReader, BufWriter, ErrorKind};
 use std::path::{Path, PathBuf};
 use std::process::exit;
 
@@ -124,7 +124,7 @@ fn increment_nonce(nonce: &mut [u8; NONCE_LEN]) {
 
 fn encrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
     if let Some(ext) = path.extension() {
-        if ext == "enc" |
+        if ext == "enc" || ext == "tmp" {
 
 | ext == "tmp" {
             return Err(io::Error::new(
@@ -137,9 +137,9 @@ fn encrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
     let out_path = path.with_extension("enc");
     let tmp_path = out_path.with_extension("tmp");
 
-    let mut salt =;
+    let mut salt = [0u8; SALT_LEN];
     let mut base_nonce = [0u8; NONCE_LEN];
-    let mut rng = rand::rng();
+    let mut rng = rand::thread_rng();
     rng.fill_bytes(&mut salt);
     rng.fill_bytes(&mut base_nonce);
 
@@ -198,7 +198,7 @@ fn decrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
         return Err(io::Error::new(ErrorKind::InvalidData, "Invalid file format: MAGIC header mismatch"));
     }
 
-    let mut salt =;
+    let mut salt = [0u8; SALT_LEN];
     let mut base_nonce = [0u8; NONCE_LEN];
     reader.read_exact(&mut salt)?;
     reader.read_exact(&mut base_nonce)?;
