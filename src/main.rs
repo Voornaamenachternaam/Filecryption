@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::exit;
 
 use clap::{Parser, Subcommand};
-use rand::RngCore;
+use rand::Rng;
 use rpassword::prompt_password;
 use zeroize::Zeroizing;
 use argon2::{Argon2, Algorithm, Version, Params};
