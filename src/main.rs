@@ -20,10 +20,14 @@ const NONCE_LEN: usize = 24;
 const TAG_LEN: usize = 16;
 /// Size of the plaintext I/O buffer for streaming file operations.
 const PLAINTEXT_CHUNK_SIZE: usize = 64 * 1024;
+/// Size of a full ciphertext chunk (plaintext + tag).
+const CIPHERTEXT_CHUNK_SIZE: usize = PLAINTEXT_CHUNK_SIZE + TAG_LEN;
+/// Total header size (MAGIC + SALT + NONCE).
+const HEADER_SIZE: u64 = (MAGIC.len() + SALT_LEN + NONCE_LEN) as u64;
 /// Argon2id memory cost parameter (in KiB).
-const MEMORY_COST: u32 = 1 << 20; // 2^20 KiB = 1 GiB
+const MEMORY_COST: u32 = 1 << 16; // 2^16 KiB = 64 MiB (Aligns with default Argon2 param value 16 from KB)
 /// Argon2id time cost parameter.
-const TIME_COST: u32 = 10;
+const TIME_COST: u32 = 3;
 /// Argon2id parallelism parameter.
 const PARALLELISM: u32 = 1;
 
@@ -225,7 +229,16 @@ fn decrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
     }
 
     let input = File::open(path)?;
-    let mut reader = BufReader::new(input);
+    let file_len = input.metadata()?.len();
+
+    if file_len < HEADER_SIZE {
+        return Err(io::Error::new(
+            ErrorKind::InvalidData,
+            "File is too short to contain a valid header.",
+        ));
+    }
+
+    let mut reader = BufReader::new(&input);
 
     let mut magic = [0u8; 8];
     reader.read_exact(&mut magic)?;
@@ -250,28 +263,21 @@ fn decrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
     let output = File::create(&tmp_path)?;
     let mut writer = BufWriter::new(output);
 
-    // The ciphertext can be any size, but we know each chunk is at most PLAINTEXT_CHUNK_SIZE + TAG_LEN.
-    let mut ciphertext_buffer = vec![0u8; PLAINTEXT_CHUNK_SIZE + TAG_LEN];
-    loop {
-        let n = reader.read(&mut ciphertext_buffer)?;
-        if n == 0 {
-            break;
-        }
-        
-        // Ensure there is enough data for a tag.
-        if n < TAG_LEN {
-            return Err(io::Error::new(
-                ErrorKind::InvalidData,
-                "Ciphertext is too short for a valid tag.",
-            ));
-        }
+    // Calculate ciphertext length and chunk structure.
+    let ciphertext_len = file_len - HEADER_SIZE;
+    let full_chunks = ciphertext_len / CIPHERTEXT_CHUNK_SIZE as u64;
+    let final_chunk_size = (ciphertext_len % CIPHERTEXT_CHUNK_SIZE as u64) as usize;
+
+    // Process full chunks.
+    for _ in 0..full_chunks {
+        let mut ciphertext_chunk = vec![0u8; CIPHERTEXT_CHUNK_SIZE];
+        reader.read_exact(&mut ciphertext_chunk)?;
 
         let nonce = Nonce::from_slice(&cur_nonce)
             .map_err(|_| io::Error::other("Invalid nonce state"))?;
         
-        // Create an empty buffer with pre-allocated capacity for the plaintext.
-        let mut plaintext_chunk = Vec::with_capacity(n - TAG_LEN);
-        xchacha20poly1305::open(&key, &nonce, &ciphertext_buffer[..n], None, &mut plaintext_chunk)
+        let mut plaintext_chunk = Vec::with_capacity(PLAINTEXT_CHUNK_SIZE);
+        xchacha20poly1305::open(&key, &nonce, &ciphertext_chunk, None, &mut plaintext_chunk)
             .map_err(|_| {
                 io::Error::new(
                     ErrorKind::InvalidData,
@@ -288,6 +294,32 @@ fn decrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
                 break;
             }
         }
+    }
+
+    // Process the final, potentially short, chunk.
+    if final_chunk_size > 0 {
+        if final_chunk_size < TAG_LEN {
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                "Final ciphertext chunk is too short for a valid tag.",
+            ));
+        }
+        let mut final_ciphertext_chunk = vec![0u8; final_chunk_size];
+        reader.read_exact(&mut final_ciphertext_chunk)?;
+
+        let nonce = Nonce::from_slice(&cur_nonce)
+            .map_err(|_| io::Error::other("Invalid nonce state"))?;
+        
+        let mut final_plaintext_chunk = Vec::with_capacity(final_chunk_size - TAG_LEN);
+        xchacha20poly1305::open(&key, &nonce, &final_ciphertext_chunk, None, &mut final_plaintext_chunk)
+            .map_err(|_| {
+                io::Error::new(
+                    ErrorKind::InvalidData,
+                    "Authentication failed on final chunk: incorrect password or corrupted data.",
+                )
+            })?;
+
+        writer.write_all(&final_plaintext_chunk)?;
     }
 
     writer.flush()?;
