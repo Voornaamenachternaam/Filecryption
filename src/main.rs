@@ -1,14 +1,14 @@
 use std::fs::{self, File};
-use std::io::{self, Read, Write, BufReader, BufWriter, ErrorKind};
+use std::io::{self, BufReader, BufWriter, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::exit;
 
+use argon2::{Algorithm, Argon2, Params, Version};
 use clap::{Parser, Subcommand};
+use orion::hazardous::aead::xchacha20poly1305::{self, Nonce, SecretKey as OrionSecretKey};
 use rand::RngCore;
 use rpassword::prompt_password;
 use zeroize::Zeroizing;
-use argon2::{Argon2, Algorithm, Version, Params};
-use orion::hazardous::aead::xchacha20poly1305::{self, Nonce, SecretKey as OrionSecretKey};
 
 /// The magic header identifying an encrypted file.
 const MAGIC: &[u8; 8] = b"FCRYPT01";
@@ -194,16 +194,22 @@ fn encrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
             break;
         }
 
-        let nonce = Nonce::from_slice(&cur_nonce)
-            .map_err(|_| io::Error::other("Invalid nonce state"))?;
-        
+        let nonce =
+            Nonce::from_slice(&cur_nonce).map_err(|_| io::Error::other("Invalid nonce state"))?;
+
         // Create an empty buffer with pre-allocated capacity for the ciphertext + tag.
         let mut ciphertext_chunk = Vec::with_capacity(n + TAG_LEN);
-        xchacha20poly1305::seal(&key, &nonce, &plaintext_buffer[..n], None, &mut ciphertext_chunk)
-            .map_err(|_| io::Error::other("AEAD seal operation failed"))?;
+        xchacha20poly1305::seal(
+            &key,
+            &nonce,
+            &plaintext_buffer[..n],
+            None,
+            &mut ciphertext_chunk,
+        )
+        .map_err(|_| io::Error::other("AEAD seal operation failed"))?;
 
         writer.write_all(&ciphertext_chunk)?;
-        
+
         // Advance the nonce for the next chunk.
         for i in (0..NONCE_LEN).rev() {
             cur_nonce[i] = cur_nonce[i].wrapping_add(1);
@@ -273,9 +279,9 @@ fn decrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
         let mut ciphertext_chunk = vec![0u8; CIPHERTEXT_CHUNK_SIZE];
         reader.read_exact(&mut ciphertext_chunk)?;
 
-        let nonce = Nonce::from_slice(&cur_nonce)
-            .map_err(|_| io::Error::other("Invalid nonce state"))?;
-        
+        let nonce =
+            Nonce::from_slice(&cur_nonce).map_err(|_| io::Error::other("Invalid nonce state"))?;
+
         let mut plaintext_chunk = Vec::with_capacity(PLAINTEXT_CHUNK_SIZE);
         xchacha20poly1305::open(&key, &nonce, &ciphertext_chunk, None, &mut plaintext_chunk)
             .map_err(|_| {
@@ -286,7 +292,7 @@ fn decrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
             })?;
 
         writer.write_all(&plaintext_chunk)?;
-        
+
         // Advance the nonce for the next chunk.
         for i in (0..NONCE_LEN).rev() {
             cur_nonce[i] = cur_nonce[i].wrapping_add(1);
@@ -307,17 +313,23 @@ fn decrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
         let mut final_ciphertext_chunk = vec![0u8; final_chunk_size];
         reader.read_exact(&mut final_ciphertext_chunk)?;
 
-        let nonce = Nonce::from_slice(&cur_nonce)
-            .map_err(|_| io::Error::other("Invalid nonce state"))?;
-        
+        let nonce =
+            Nonce::from_slice(&cur_nonce).map_err(|_| io::Error::other("Invalid nonce state"))?;
+
         let mut final_plaintext_chunk = Vec::with_capacity(final_chunk_size - TAG_LEN);
-        xchacha20poly1305::open(&key, &nonce, &final_ciphertext_chunk, None, &mut final_plaintext_chunk)
-            .map_err(|_| {
-                io::Error::new(
-                    ErrorKind::InvalidData,
-                    "Authentication failed on final chunk: incorrect password or corrupted data.",
-                )
-            })?;
+        xchacha20poly1305::open(
+            &key,
+            &nonce,
+            &final_ciphertext_chunk,
+            None,
+            &mut final_plaintext_chunk,
+        )
+        .map_err(|_| {
+            io::Error::new(
+                ErrorKind::InvalidData,
+                "Authentication failed on final chunk: incorrect password or corrupted data.",
+            )
+        })?;
 
         writer.write_all(&final_plaintext_chunk)?;
     }
@@ -335,7 +347,7 @@ fn walk_dir(dir: &Path, pw: &Zeroizing<String>, encrypt: bool) -> io::Result<()>
     if !dir.is_dir() {
         return Ok(());
     }
-    
+
     for entry in fs::read_dir(dir)? {
         let path = entry?.path();
         if path.is_dir() {
@@ -351,17 +363,19 @@ fn walk_dir(dir: &Path, pw: &Zeroizing<String>, encrypt: bool) -> io::Result<()>
 
 /// Derives a 256-bit secret key from a password and salt using Argon2id.
 fn derive_key(password: &Zeroizing<String>, salt: &[u8; SALT_LEN]) -> io::Result<OrionSecretKey> {
-    let params = Params::new(MEMORY_COST, TIME_COST, PARALLELISM, Some(32))
-        .map_err(|e| io::Error::new(ErrorKind::InvalidInput, format!("Argon2 parameter validation failed: {}", e)))?;
-    
+    let params = Params::new(MEMORY_COST, TIME_COST, PARALLELISM, Some(32)).map_err(|e| {
+        io::Error::new(
+            ErrorKind::InvalidInput,
+            format!("Argon2 parameter validation failed: {}", e),
+        )
+    })?;
+
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
     let mut raw_key = Zeroizing::new([0u8; 32]);
 
-    argon2.hash_password_into(
-        password.as_bytes(),
-        salt,
-        raw_key.as_mut(),
-    ).map_err(|e| io::Error::other(format!("Argon2 key derivation failed: {}", e)))?;
+    argon2
+        .hash_password_into(password.as_bytes(), salt, raw_key.as_mut())
+        .map_err(|e| io::Error::other(format!("Argon2 key derivation failed: {}", e)))?;
 
     OrionSecretKey::from_slice(raw_key.as_ref())
         .map_err(|_| io::Error::other("Failed to initialize Orion secret key"))
