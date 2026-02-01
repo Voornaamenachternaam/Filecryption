@@ -4,7 +4,7 @@
 
 use std::{
     fs::{self, File},
-    io::{Read, Write, BufReader, BufWriter},
+    io::{Read, Write},
     path::PathBuf,
     process::{Command, Stdio},
 };
@@ -66,7 +66,7 @@ fn test_encrypt_decrypt_roundtrip_small_file() {
 
     // Encrypt
     let (_out, err, code) = run_with_passwords(
-        &["encrypt", plaintext_path.to_str().unwrap()],
+        ["encrypt", plaintext_path.to_str().unwrap()],
         &["LongEnoughPassword123", "LongEnoughPassword123"],
     );
     assert_eq!(code, 0, "Encryption failed: stderr={}", err);
@@ -74,7 +74,7 @@ fn test_encrypt_decrypt_roundtrip_small_file() {
 
     // Decrypt
     let (_out, err, code) = run_with_passwords(
-        &["decrypt", encrypted_path.to_str().unwrap()],
+        ["decrypt", encrypted_path.to_str().unwrap()],
         &["LongEnoughPassword123"],
     );
     assert_eq!(code, 0, "Decryption failed: stderr={}", err);
@@ -90,7 +90,7 @@ fn test_encrypt_decrypt_roundtrip_empty_file() {
 
     // Encrypt empty file
     let (_out, err, code) = run_with_passwords(
-        &["encrypt", plaintext_path.to_str().unwrap()],
+        ["encrypt", plaintext_path.to_str().unwrap()],
         &["LongEnoughPassword123", "LongEnoughPassword123"],
     );
     assert_eq!(code, 0, "Empty file encryption failed: stderr={}", err);
@@ -98,7 +98,7 @@ fn test_encrypt_decrypt_roundtrip_empty_file() {
 
     // Decrypt empty file
     let (_out, err, code) = run_with_passwords(
-        &["decrypt", encrypted_path.to_str().unwrap()],
+        ["decrypt", encrypted_path.to_str().unwrap()],
         &["LongEnoughPassword123"],
     );
     assert_eq!(code, 0, "Empty file decryption failed: stderr={}", err);
@@ -116,14 +116,14 @@ fn test_encrypt_decrypt_roundtrip_exact_chunk_boundary() {
 
     // Encrypt
     let (_out, err, code) = run_with_passwords(
-        &["encrypt", plaintext_path.to_str().unwrap()],
+        ["encrypt", plaintext_path.to_str().unwrap()],
         &["LongEnoughPassword123", "LongEnoughPassword123"],
     );
     assert_eq!(code, 0, "Chunk boundary encryption failed: stderr={}", err);
 
     // Decrypt
     let (_out, err, code) = run_with_passwords(
-        &["decrypt", encrypted_path.to_str().unwrap()],
+        ["decrypt", encrypted_path.to_str().unwrap()],
         &["LongEnoughPassword123"],
     );
     assert_eq!(code, 0, "Chunk boundary decryption failed: stderr={}", err);
@@ -140,14 +140,14 @@ fn test_encrypt_decrypt_roundtrip_multiple_chunks() {
 
     // Encrypt
     let (_out, err, code) = run_with_passwords(
-        &["encrypt", plaintext_path.to_str().unwrap()],
+        ["encrypt", plaintext_path.to_str().unwrap()],
         &["LongEnoughPassword123", "LongEnoughPassword123"],
     );
     assert_eq!(code, 0, "Large file encryption failed: stderr={}", err);
 
     // Decrypt
     let (_out, err, code) = run_with_passwords(
-        &["decrypt", encrypted_path.to_str().unwrap()],
+        ["decrypt", encrypted_path.to_str().unwrap()],
         &["LongEnoughPassword123"],
     );
     assert_eq!(code, 0, "Large file decryption failed: stderr={}", err);
@@ -162,7 +162,7 @@ fn test_password_too_short_rejected() {
 
     // Attempt encryption with short password
     let (_out, err, code) = run_with_passwords(
-        &["encrypt", plaintext_path.to_str().unwrap()],
+        ["encrypt", plaintext_path.to_str().unwrap()],
         &["Short1!"],
     );
     assert_ne!(code, 0, "Should have failed with short password");
@@ -181,7 +181,7 @@ fn test_password_mismatch_rejected() {
 
     // Attempt encryption with mismatched passwords
     let (_out, err, code) = run_with_passwords(
-        &["encrypt", plaintext_path.to_str().unwrap()],
+        ["encrypt", plaintext_path.to_str().unwrap()],
         &["LongEnoughPassword123", "DifferentPassword456"],
     );
     assert_ne!(code, 0, "Should have failed with password mismatch");
@@ -201,14 +201,14 @@ fn test_wrong_password_decryption_fails() {
 
     // Encrypt with correct password
     let (_out, err, code) = run_with_passwords(
-        &["encrypt", plaintext_path.to_str().unwrap()],
+        ["encrypt", plaintext_path.to_str().unwrap()],
         &["CorrectPassword123", "CorrectPassword123"],
     );
     assert_eq!(code, 0, "Initial encryption failed: {}", err);
 
     // Attempt decryption with wrong password
     let (_out, err, code) = run_with_passwords(
-        &["decrypt", encrypted_path.to_str().unwrap()],
+        ["decrypt", encrypted_path.to_str().unwrap()],
         &["WrongPassword456"],
     );
     assert_ne!(code, 0, "Should have failed with wrong password");
@@ -229,7 +229,7 @@ fn test_corrupted_header_rejected() {
 
     // Encrypt normally
     let (_out, err, code) = run_with_passwords(
-        &["encrypt", plaintext_path.to_str().unwrap()],
+        ["encrypt", plaintext_path.to_str().unwrap()],
         &["SecurePassword123", "SecurePassword123"],
     );
     assert_eq!(code, 0, "Encryption failed: {}", err);
@@ -250,7 +250,7 @@ fn test_corrupted_header_rejected() {
 
     // Attempt decryption of corrupted file
     let (_out, err, code) = run_with_passwords(
-        &["decrypt", corrupted_path.to_str().unwrap()],
+        ["decrypt", corrupted_path.to_str().unwrap()],
         &["SecurePassword123"],
     );
     assert_ne!(code, 0, "Should reject corrupted header");
@@ -269,7 +269,7 @@ fn test_corrupted_ciphertext_rejected() {
 
     // Encrypt normally
     let (_out, err, code) = run_with_passwords(
-        &["encrypt", plaintext_path.to_str().unwrap()],
+        ["encrypt", plaintext_path.to_str().unwrap()],
         &["SecurePassword123", "SecurePassword123"],
     );
     assert_eq!(code, 0, "Encryption failed: {}", err);
@@ -292,7 +292,7 @@ fn test_corrupted_ciphertext_rejected() {
 
     // Attempt decryption of corrupted file
     let (_out, err, code) = run_with_passwords(
-        &["decrypt", corrupted_path.to_str().unwrap()],
+        ["decrypt", corrupted_path.to_str().unwrap()],
         &["SecurePassword123"],
     );
     assert_ne!(code, 0, "Should reject corrupted ciphertext");
@@ -317,7 +317,7 @@ fn test_output_file_already_exists_prevented() {
 
     // Attempt encryption (should fail due to existing output)
     let (_out, err, code) = run_with_passwords(
-        &["encrypt", plaintext_path.to_str().unwrap()],
+        ["encrypt", plaintext_path.to_str().unwrap()],
         &["LongEnoughPassword123", "LongEnoughPassword123"],
     );
     assert_ne!(code, 0, "Should fail when output exists");
@@ -335,7 +335,7 @@ fn test_decrypt_non_enc_file_is_noop() {
 
     // Attempt to "decrypt" a non-.enc file (should be no-op per spec)
     let (_out, _err, code) = run_with_passwords(
-        &["decrypt", plaintext_path.to_str().unwrap()],
+        ["decrypt", plaintext_path.to_str().unwrap()],
         &["AnyPassword123"],
     );
     assert_eq!(code, 0, "Should succeed as no-op");
@@ -355,7 +355,7 @@ fn test_encrypt_dir_recursive() {
 
     // Encrypt entire directory
     let (_out, err, code) = run_with_passwords(
-        &["encrypt-dir", dir.path().to_str().unwrap()],
+        ["encrypt-dir", dir.path().to_str().unwrap()],
         &["DirPassword123", "DirPassword123"],
     );
     assert_eq!(code, 0, "Directory encryption failed: {}", err);
@@ -381,7 +381,7 @@ fn test_decrypt_dir_recursive() {
     // Encrypt both files
     for path in [&root_path, &nested_path] {
         let (_out, err, code) = run_with_passwords(
-            &["encrypt", path.to_str().unwrap()],
+            ["encrypt", path.to_str().unwrap()],
             &["DirPassword123", "DirPassword123"],
         );
         assert_eq!(code, 0, "File encryption failed: {}", err);
@@ -389,7 +389,7 @@ fn test_decrypt_dir_recursive() {
 
     // Decrypt entire directory
     let (_out, err, code) = run_with_passwords(
-        &["decrypt-dir", dir.path().to_str().unwrap()],
+        ["decrypt-dir", dir.path().to_str().unwrap()],
         &["DirPassword123"],
     );
     assert_eq!(code, 0, "Directory decryption failed: {}", err);
@@ -414,7 +414,7 @@ fn test_tempfile_cleanup_on_failure() {
 
     // Attempt encryption (should fail)
     let (_out, _err, code) = run_with_passwords(
-        &["encrypt", plaintext_path.to_str().unwrap()],
+        ["encrypt", plaintext_path.to_str().unwrap()],
         &["LongEnoughPassword123", "LongEnoughPassword123"],
     );
     assert_ne!(code, 0, "Encryption should have failed");
@@ -435,14 +435,14 @@ fn test_nonce_increment_correctness() {
 
     // Encrypt
     let (_out, err, code) = run_with_passwords(
-        &["encrypt", plaintext_path.to_str().unwrap()],
+        ["encrypt", plaintext_path.to_str().unwrap()],
         &["NonceTestPassword123", "NonceTestPassword123"],
     );
     assert_eq!(code, 0, "Encryption failed: {}", err);
 
     // Decrypt
     let (_out, err, code) = run_with_passwords(
-        &["decrypt", encrypted_path.to_str().unwrap()],
+        ["decrypt", encrypted_path.to_str().unwrap()],
         &["NonceTestPassword123"],
     );
     assert_eq!(code, 0, "Decryption failed: {}", err);
@@ -461,14 +461,14 @@ fn test_password_with_special_characters() {
 
     // Encrypt
     let (_out, err, code) = run_with_passwords(
-        &["encrypt", plaintext_path.to_str().unwrap()],
+        ["encrypt", plaintext_path.to_str().unwrap()],
         &[special_pw, special_pw],
     );
     assert_eq!(code, 0, "Encryption with special chars failed: {}", err);
 
     // Decrypt
     let (_out, err, code) = run_with_passwords(
-        &["decrypt", encrypted_path.to_str().unwrap()],
+        ["decrypt", encrypted_path.to_str().unwrap()],
         &[special_pw],
     );
     assert_eq!(code, 0, "Decryption with special chars failed: {}", err);
@@ -520,7 +520,7 @@ fn test_file_permissions_preserved() {
 
     // Encrypt
     let (_out, err, code) = run_with_passwords(
-        &["encrypt", plaintext_path.to_str().unwrap()],
+        ["encrypt", plaintext_path.to_str().unwrap()],
         &["PermPassword123", "PermPassword123"],
     );
     assert_eq!(code, 0, "Encryption failed: {}", err);
