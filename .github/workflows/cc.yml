@@ -1,0 +1,37 @@
+name: Main
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 0 * * *"
+  push:
+
+permissions:
+  actions: write
+  contents: read
+  id-token: write
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6.0.1
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: cargo build
+        run: cargo build --workspace --verbose
+
+      - name: cargo test
+        run: cargo llvm-cov --all-features --workspace --lcov --output-path target/lcov.info
+
+      - uses: qltysh/qlty-action/coverage@main
+        with:
+          token: ${{ secrets.QLTY_COVERAGE_TOKEN }}
+          files: target/lcov.info 
