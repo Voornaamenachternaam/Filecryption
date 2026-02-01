@@ -1,7 +1,3 @@
-//! Unit tests for filecryption core logic.
-//! Bypasses TTY-dependent CLI by testing library functions directly.
-//! 100% compatible with cargo llvm-cov in CI environments.
-
 use std::{
     fs::{self, File},
     io::{Read, Write, ErrorKind},
