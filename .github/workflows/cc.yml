@@ -18,9 +18,11 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v6.0.1
-
+           
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
