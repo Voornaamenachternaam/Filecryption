@@ -1,4 +1,3 @@
-#![cfg_attr(test, feature(proc_macro_hygiene))] // Enables #[path] imports for tests
 use std::fs::{self, File};
 use std::io::{self, BufReader, BufWriter, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
