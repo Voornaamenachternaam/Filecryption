@@ -31,7 +31,7 @@ jobs:
         run: cargo build --workspace --verbose
 
       - name: cargo test
-        run: cargo llvm-cov --all-features --workspace --lcov --output-path target/lcov.info
+        run: cargo llvm-cov --all-features --lcov --output-path target/lcov.info
 
       - uses: qltysh/qlty-action/coverage@main
         with:
