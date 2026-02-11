@@ -42,341 +42,341 @@ impl TempFile {
     fn create(path: &Path) -> io::Result<Self> {
         let _ = File::create(path)?;
         Ok(TempFile {
-            path: path.to_path_buf(),
-            active: true,
-        })
-    }
-
-    /// Marks the temporary file as persisted, preventing its deletion on drop.
-    fn persist(mut self) {
-        self.active = false;
-    }
-}
-
-impl Drop for TempFile {
-    /// Deletes the tracked file if it is still marked as active.
-    fn drop(&mut self) {
-        if self.active {
-            let _ = fs::remove_file(&self.path);
-        }
-    }
-}
-
-/// Command Line Interface definition using Clap.
-#[derive(Parser)]
-#[command(
-    name = "filecryption",
-    version,
-    about = "Secure file encryption using Argon2id + XChaCha20-Poly1305",
-    subcommand_required = true,
-    arg_required_else_help = true
-)]
-struct Cli {
-    #[command(subcommand)]
-    command: Command,
-}
-
-/// Enumeration of supported commands.
-#[derive(Subcommand)]
-enum Command {
-    /// Encrypt a single file.
-    Encrypt { file: PathBuf },
-    /// Decrypt a single file.
-    Decrypt { file: PathBuf },
-    /// Recursively encrypt all files in a directory.
-    EncryptDir { dir: PathBuf },
-    /// Recursively decrypt all files in a directory.
-    DecryptDir { dir: PathBuf },
-}
-
-fn main() {
-    let cli = Cli::parse();
-
-    match cli.command {
-        Command::Encrypt { file } => {
-            let pw = prompt_password_secure(true).unwrap_or_else(|e| {
-                eprintln!("Password prompt failed: {}", e);
-                exit(1);
-            });
-            if let Err(e) = encrypt_file(&file, &pw) {
-                eprintln!("Encryption of '{}' failed: {}", file.display(), e);
-                exit(1);
-            }
-        }
-        Command::Decrypt { file } => {
-            let pw = prompt_password_secure(false).unwrap_or_else(|e| {
-                eprintln!("Password prompt failed: {}", e);
-                exit(1);
-            });
-            if let Err(e) = decrypt_file(&file, &pw) {
-                eprintln!("Decryption of '{}' failed: {}", file.display(), e);
-                exit(1);
-            }
-        }
-        Command::EncryptDir { dir } => {
-            let pw = prompt_password_secure(true).unwrap_or_else(|e| {
-                eprintln!("Password prompt failed: {}", e);
-                exit(1);
-            });
-            if let Err(e) = walk_dir(&dir, &pw, true) {
-                eprintln!("Directory encryption of '{}' failed: {}", dir.display(), e);
-                exit(1);
-            }
-        }
-        Command::DecryptDir { dir } => {
-            let pw = prompt_password_secure(false).unwrap_or_else(|e| {
-                eprintln!("Password prompt failed: {}", e);
-                exit(1);
-            });
-            if let Err(e) = walk_dir(&dir, &pw, false) {
-                eprintln!("Directory decryption of '{}' failed: {}", dir.display(), e);
-                exit(1);
-            }
-        }
-    }
-}
-
-/// Prompts the user for a master password, enforcing length and confirmation.
-fn prompt_password_secure(confirm: bool) -> io::Result<Zeroizing<String>> {
-    let pw = prompt_password("Enter Master Password: ")?;
-    if pw.len() < 12 {
-        eprintln!("Security Error: Password must be at least 12 characters.");
-        exit(1);
-    }
-    if confirm {
-        let confirm_pw = prompt_password("Confirm Master Password: ")?;
-        if pw != confirm_pw {
-            eprintln!("Security Error: Passwords do not match.");
-            exit(1);
-        }
-    }
-    Ok(Zeroizing::new(pw))
-}
-
-/// Encrypts a single file using XChaCha20-Poly1305 and Argon2id.
-fn encrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
-    let out_path = path.with_extension("enc");
-    // Do not overwrite an existing encrypted file.
-    if out_path.exists() {
-        return Err(io::Error::new(
-            ErrorKind::InvalidInput,
-            "Output file already exists.",
-        ));
-    }
-    let tmp_path = out_path.with_extension("tmp");
-
-    let mut salt = [0u8; SALT_LEN];
-    let mut base_nonce = [0u8; NONCE_LEN];
-    let mut rng = rand::rng(); // Fixed: Use the non-deprecated `rng()`
-    rng.fill_bytes(&mut salt);
-    rng.fill_bytes(&mut base_nonce);
-
-    let key = derive_key(password, &salt)?;
-
-    let input = File::open(path)?;
-    let mut reader = BufReader::new(input);
-    let tmp_file_handler = TempFile::create(&tmp_path)?;
-    let output = File::create(&tmp_path)?;
-    let mut writer = BufWriter::new(output);
-
-    // Write the file header.
-    writer.write_all(MAGIC)?;
-    writer.write_all(&salt)?;
-    writer.write_all(&base_nonce)?;
-
-    // Use a pre-allocated buffer for plaintext.
-    let mut plaintext_buffer = vec![0u8; PLAINTEXT_CHUNK_SIZE];
-    let mut cur_nonce = base_nonce;
-
-    loop {
-        let n = reader.read(&mut plaintext_buffer)?;
-        if n == 0 {
-            break;
+                path: path.to_path_buf(),
+                active: true,
+            })
         }
 
-        let nonce =
-            Nonce::from_slice(&cur_nonce).map_err(|_| io::Error::other("Invalid nonce state"))?;
+        /// Marks the temporary file as persisted, preventing its deletion on drop.
+        fn persist(mut self) {
+            self.active = false;
+        }
+    }
 
-        // Create an empty buffer with pre-allocated capacity for the ciphertext + tag.
-        let mut ciphertext_chunk = Vec::with_capacity(n + TAG_LEN);
-        xchacha20poly1305::seal(
-            &key,
-            &nonce,
-            &plaintext_buffer[..n],
-            None,
-            &mut ciphertext_chunk,
-        )
-        .map_err(|_| io::Error::other("AEAD seal operation failed"))?;
-
-        writer.write_all(&ciphertext_chunk)?;
-
-        // Advance the nonce for the next chunk.
-        for i in (0..NONCE_LEN).rev() {
-            cur_nonce[i] = cur_nonce[i].wrapping_add(1);
-            if cur_nonce[i] != 0 {
-                break;
+    impl Drop for TempFile {
+        /// Deletes the tracked file if it is still marked as active.
+        fn drop(&mut self) {
+            if self.active {
+                let _ = fs::remove_file(&self.path);
             }
         }
     }
 
-    writer.flush()?;
-    drop(writer); // Flush writer and close file handle.
-
-    fs::rename(&tmp_path, &out_path)?;
-    tmp_file_handler.persist(); // Prevent cleanup on success.
-    Ok(())
-}
-
-/// Decrypts a single file previously encrypted with XChaCha20-Poly1305 and Argon2id.
-fn decrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
-    if path.extension().and_then(|s| s.to_str()) != Some("enc") {
-        // Not an encrypted file, do nothing to avoid errors.
-        return Ok(());
-    }
-
-    let input = File::open(path)?;
-    let file_len = input.metadata()?.len();
-
-    if file_len < HEADER_SIZE {
-        return Err(io::Error::new(
-            ErrorKind::InvalidData,
-            "File is too short to contain a valid header.",
-        ));
-    }
-
-    let mut reader = BufReader::new(&input);
-
-    let mut magic = [0u8; 8];
-    reader.read_exact(&mut magic)?;
-    if &magic != MAGIC {
-        return Err(io::Error::new(
-            ErrorKind::InvalidData,
-            "Invalid file format: MAGIC header mismatch",
-        ));
-    }
-
-    let mut salt = [0u8; SALT_LEN];
-    let mut base_nonce = [0u8; NONCE_LEN];
-    reader.read_exact(&mut salt)?;
-    reader.read_exact(&mut base_nonce)?;
-
-    let key = derive_key(password, &salt)?;
-    let mut cur_nonce = base_nonce;
-
-    let out_path = path.with_extension("");
-    let tmp_path = out_path.with_extension("tmp");
-    let tmp_file_handler = TempFile::create(&tmp_path)?;
-    let output = File::create(&tmp_path)?;
-    let mut writer = BufWriter::new(output);
-
-    // Calculate ciphertext length and chunk structure.
-    let ciphertext_len = file_len - HEADER_SIZE;
-    let full_chunks = ciphertext_len / CIPHERTEXT_CHUNK_SIZE as u64;
-    let final_chunk_size = (ciphertext_len % CIPHERTEXT_CHUNK_SIZE as u64) as usize;
-
-    // Process full chunks.
-    for _ in 0..full_chunks {
-        let mut ciphertext_chunk = vec![0u8; CIPHERTEXT_CHUNK_SIZE];
-        reader.read_exact(&mut ciphertext_chunk)?;
-
-        let nonce =
-            Nonce::from_slice(&cur_nonce).map_err(|_| io::Error::other("Invalid nonce state"))?;
-
-        let mut plaintext_chunk = Vec::with_capacity(PLAINTEXT_CHUNK_SIZE);
-        xchacha20poly1305::open(&key, &nonce, &ciphertext_chunk, None, &mut plaintext_chunk)
-            .map_err(|_| {
-                io::Error::new(
-                    ErrorKind::InvalidData,
-                    "Authentication failed: incorrect password or corrupted data.",
-                )
-            })?;
-
-        writer.write_all(&plaintext_chunk)?;
-
-        // Advance the nonce for the next chunk.
-        for i in (0..NONCE_LEN).rev() {
-            cur_nonce[i] = cur_nonce[i].wrapping_add(1);
-            if cur_nonce[i] != 0 {
-                break;
-            }
+    /// Command Line Interface definition using Clap.
+    #[derive(Parser)]
+    #[command(
+            name = "filecryption",
+            version,
+            about = "Secure file encryption using Argon2id + XChaCha20-Poly1305",
+            subcommand_required = true,
+            arg_required_else_help = true
+        )]
+        struct Cli {
+            #[command(subcommand)]
+            command: Command,
         }
-    }
 
-    // Process the final, potentially short, chunk.
-    if final_chunk_size > 0 {
-        if final_chunk_size < TAG_LEN {
-            return Err(io::Error::new(
-                ErrorKind::InvalidData,
-                "Final ciphertext chunk is too short for a valid tag.",
-            ));
+        /// Enumeration of supported commands.
+        #[derive(Subcommand)]
+        enum Command {
+            /// Encrypt a single file.
+            Encrypt { file: PathBuf },
+            /// Decrypt a single file.
+            Decrypt { file: PathBuf },
+            /// Recursively encrypt all files in a directory.
+            EncryptDir { dir: PathBuf },
+            /// Recursively decrypt all files in a directory.
+            DecryptDir { dir: PathBuf },
         }
-        let mut final_ciphertext_chunk = vec![0u8; final_chunk_size];
-        reader.read_exact(&mut final_ciphertext_chunk)?;
 
-        let nonce =
-            Nonce::from_slice(&cur_nonce).map_err(|_| io::Error::other("Invalid nonce state"))?;
+        fn main() {
+            let cli = Cli::parse();
 
-        let mut final_plaintext_chunk = Vec::with_capacity(final_chunk_size - TAG_LEN);
-        xchacha20poly1305::open(
-            &key,
-            &nonce,
-            &final_ciphertext_chunk,
-            None,
-            &mut final_plaintext_chunk,
-        )
-        .map_err(|_| {
-            io::Error::new(
-                ErrorKind::InvalidData,
-                "Authentication failed on final chunk: incorrect password or corrupted data.",
-            )
-        })?;
+            match cli.command {
+                Command::Encrypt { file } => {
+                    let pw = prompt_password_secure(true).unwrap_or_else(|e| {
+                            eprintln!("Password prompt failed: {}", e);
+                            exit(1);
+                        });
+                        if let Err(e) = encrypt_file(&file, &pw) {
+                            eprintln!("Encryption of '{}' failed: {}", file.display(), e);
+                            exit(1);
+                        }
+                    }
+                    Command::Decrypt { file } => {
+                        let pw = prompt_password_secure(false).unwrap_or_else(|e| {
+                                eprintln!("Password prompt failed: {}", e);
+                                exit(1);
+                            });
+                            if let Err(e) = decrypt_file(&file, &pw) {
+                                eprintln!("Decryption of '{}' failed: {}", file.display(), e);
+                                exit(1);
+                            }
+                        }
+                        Command::EncryptDir { dir } => {
+                            let pw = prompt_password_secure(true).unwrap_or_else(|e| {
+                                    eprintln!("Password prompt failed: {}", e);
+                                    exit(1);
+                                });
+                                if let Err(e) = walk_dir(&dir, &pw, true) {
+                                    eprintln!("Directory encryption of '{}' failed: {}", dir.display(), e);
+                                    exit(1);
+                                }
+                            }
+                            Command::DecryptDir { dir } => {
+                                let pw = prompt_password_secure(false).unwrap_or_else(|e| {
+                                        eprintln!("Password prompt failed: {}", e);
+                                        exit(1);
+                                    });
+                                    if let Err(e) = walk_dir(&dir, &pw, false) {
+                                        eprintln!("Directory decryption of '{}' failed: {}", dir.display(), e);
+                                        exit(1);
+                                    }
+                                }
+                            }
+                        }
 
-        writer.write_all(&final_plaintext_chunk)?;
-    }
+                        /// Prompts the user for a master password, enforcing length and confirmation.
+                        fn prompt_password_secure(confirm: bool) -> io::Result<Zeroizing<String>> {
+                            let pw = prompt_password("Enter Master Password: ")?;
+                            if pw.len() < 12 {
+                                eprintln!("Security Error: Password must be at least 12 characters.");
+                                exit(1);
+                            }
+                            if confirm {
+                                let confirm_pw = prompt_password("Confirm Master Password: ")?;
+                                if pw != confirm_pw {
+                                    eprintln!("Security Error: Passwords do not match.");
+                                    exit(1);
+                                }
+                            }
+                            Ok(Zeroizing::new(pw))
+                        }
 
-    writer.flush()?;
-    drop(writer);
+                        /// Encrypts a single file using XChaCha20-Poly1305 and Argon2id.
+                        fn encrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
+                            let out_path = path.with_extension("enc");
+                            // Do not overwrite an existing encrypted file.
+                            if out_path.exists() {
+                                return Err(io::Error::new(
+                                        ErrorKind::InvalidInput,
+                                        "Output file already exists.",
+                                    ));
+                                }
+                                let tmp_path = out_path.with_extension("tmp");
 
-    fs::rename(&tmp_path, &out_path)?;
-    tmp_file_handler.persist();
-    Ok(())
-}
+                                let mut salt = [0u8; SALT_LEN];
+                                let mut base_nonce = [0u8; NONCE_LEN];
+                                let mut rng = rand::rng(); // Fixed: Use the non-deprecated `rng()`
+                                rng.fill_bytes(&mut salt);
+                                rng.fill_bytes(&mut base_nonce);
 
-/// Recursively processes all files within a directory.
-fn walk_dir(dir: &Path, pw: &Zeroizing<String>, encrypt: bool) -> io::Result<()> {
-    if !dir.is_dir() {
-        return Ok(());
-    }
+                                let key = derive_key(password, &salt)?;
 
-    for entry in fs::read_dir(dir)? {
-        let path = entry?.path();
-        if path.is_dir() {
-            walk_dir(&path, pw, encrypt)?; // Propagate errors upwards.
-        } else if encrypt {
-            encrypt_file(&path, pw)?;
-        } else {
-            decrypt_file(&path, pw)?;
-        }
-    }
-    Ok(())
-}
+                                let input = File::open(path)?;
+                                let mut reader = BufReader::new(input);
+                                let tmp_file_handler = TempFile::create(&tmp_path)?;
+                                let output = File::create(&tmp_path)?;
+                                let mut writer = BufWriter::new(output);
 
-/// Derives a 256-bit secret key from a password and salt using Argon2id.
-fn derive_key(password: &Zeroizing<String>, salt: &[u8; SALT_LEN]) -> io::Result<OrionSecretKey> {
-    let params = Params::new(MEMORY_COST, TIME_COST, PARALLELISM, Some(32)).map_err(|e| {
-        io::Error::new(
-            ErrorKind::InvalidInput,
-            format!("Argon2 parameter validation failed: {}", e),
-        )
-    })?;
+                                // Write the file header.
+                                writer.write_all(MAGIC)?;
+                                writer.write_all(&salt)?;
+                                writer.write_all(&base_nonce)?;
 
-    let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
-    let mut raw_key = Zeroizing::new([0u8; 32]);
+                                // Use a pre-allocated buffer for plaintext.
+                                let mut plaintext_buffer = vec![0u8; PLAINTEXT_CHUNK_SIZE];
+                                let mut cur_nonce = base_nonce;
 
-    argon2
-        .hash_password_into(password.as_bytes(), salt, raw_key.as_mut())
-        .map_err(|e| io::Error::other(format!("Argon2 key derivation failed: {}", e)))?;
+                                loop {
+                                    let n = reader.read(&mut plaintext_buffer)?;
+                                    if n == 0 {
+                                        break;
+                                    }
 
-    OrionSecretKey::from_slice(raw_key.as_ref())
-        .map_err(|_| io::Error::other("Failed to initialize Orion secret key"))
-}
+                                    let nonce =
+                                    Nonce::from_slice(&cur_nonce).map_err(|_| io::Error::other("Invalid nonce state"))?;
+
+                                    // Create an empty buffer with pre-allocated capacity for the ciphertext + tag.
+                                    let mut ciphertext_chunk = Vec::with_capacity(n + TAG_LEN);
+                                    xchacha20poly1305::seal(
+                                        &key,
+                                        &nonce,
+                                        &plaintext_buffer[..n],
+                                        None,
+                                        &mut ciphertext_chunk,
+                                    )
+                                    .map_err(|_| io::Error::other("AEAD seal operation failed"))?;
+
+                                    writer.write_all(&ciphertext_chunk)?;
+
+                                    // Advance the nonce for the next chunk.
+                                    for i in (0..NONCE_LEN).rev() {
+                                        cur_nonce[i] = cur_nonce[i].wrapping_add(1);
+                                        if cur_nonce[i] != 0 {
+                                            break;
+                                        }
+                                    }
+                                }
+
+                                writer.flush()?;
+                                drop(writer); // Flush writer and close file handle.
+
+                                fs::rename(&tmp_path, &out_path)?;
+                                tmp_file_handler.persist(); // Prevent cleanup on success.
+                                Ok(())
+                            }
+
+                            /// Decrypts a single file previously encrypted with XChaCha20-Poly1305 and Argon2id.
+                            fn decrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
+                                if path.extension().and_then(|s| s.to_str()) != Some("enc") {
+                                    // Not an encrypted file, do nothing to avoid errors.
+                                    return Ok(());
+                                }
+
+                                let input = File::open(path)?;
+                                let file_len = input.metadata()?.len();
+
+                                if file_len < HEADER_SIZE {
+                                    return Err(io::Error::new(
+                                            ErrorKind::InvalidData,
+                                            "File is too short to contain a valid header.",
+                                        ));
+                                    }
+
+                                    let mut reader = BufReader::new(&input);
+
+                                    let mut magic = [0u8; 8];
+                                    reader.read_exact(&mut magic)?;
+                                    if &magic != MAGIC {
+                                        return Err(io::Error::new(
+                                                ErrorKind::InvalidData,
+                                                "Invalid file format: MAGIC header mismatch",
+                                            ));
+                                        }
+
+                                        let mut salt = [0u8; SALT_LEN];
+                                        let mut base_nonce = [0u8; NONCE_LEN];
+                                        reader.read_exact(&mut salt)?;
+                                        reader.read_exact(&mut base_nonce)?;
+
+                                        let key = derive_key(password, &salt)?;
+                                        let mut cur_nonce = base_nonce;
+
+                                        let out_path = path.with_extension("");
+                                        let tmp_path = out_path.with_extension("tmp");
+                                        let tmp_file_handler = TempFile::create(&tmp_path)?;
+                                        let output = File::create(&tmp_path)?;
+                                        let mut writer = BufWriter::new(output);
+
+                                        // Calculate ciphertext length and chunk structure.
+                                        let ciphertext_len = file_len - HEADER_SIZE;
+                                        let full_chunks = ciphertext_len / CIPHERTEXT_CHUNK_SIZE as u64;
+                                        let final_chunk_size = (ciphertext_len % CIPHERTEXT_CHUNK_SIZE as u64) as usize;
+
+                                        // Process full chunks.
+                                        for _ in 0..full_chunks {
+                                            let mut ciphertext_chunk = vec![0u8; CIPHERTEXT_CHUNK_SIZE];
+                                            reader.read_exact(&mut ciphertext_chunk)?;
+
+                                            let nonce =
+                                            Nonce::from_slice(&cur_nonce).map_err(|_| io::Error::other("Invalid nonce state"))?;
+
+                                            let mut plaintext_chunk = Vec::with_capacity(PLAINTEXT_CHUNK_SIZE);
+                                            xchacha20poly1305::open(&key, &nonce, &ciphertext_chunk, None, &mut plaintext_chunk)
+                                            .map_err(|_| {
+                                                    io::Error::new(
+                                                        ErrorKind::InvalidData,
+                                                        "Authentication failed: incorrect password or corrupted data.",
+                                                    )
+                                                })?;
+
+                                                writer.write_all(&plaintext_chunk)?;
+
+                                                // Advance the nonce for the next chunk.
+                                                for i in (0..NONCE_LEN).rev() {
+                                                    cur_nonce[i] = cur_nonce[i].wrapping_add(1);
+                                                    if cur_nonce[i] != 0 {
+                                                        break;
+                                                    }
+                                                }
+                                            }
+
+                                            // Process the final, potentially short, chunk.
+                                            if final_chunk_size > 0 {
+                                                if final_chunk_size < TAG_LEN {
+                                                    return Err(io::Error::new(
+                                                            ErrorKind::InvalidData,
+                                                            "Final ciphertext chunk is too short for a valid tag.",
+                                                        ));
+                                                    }
+                                                    let mut final_ciphertext_chunk = vec![0u8; final_chunk_size];
+                                                    reader.read_exact(&mut final_ciphertext_chunk)?;
+
+                                                    let nonce =
+                                                    Nonce::from_slice(&cur_nonce).map_err(|_| io::Error::other("Invalid nonce state"))?;
+
+                                                    let mut final_plaintext_chunk = Vec::with_capacity(final_chunk_size - TAG_LEN);
+                                                    xchacha20poly1305::open(
+                                                        &key,
+                                                        &nonce,
+                                                        &final_ciphertext_chunk,
+                                                        None,
+                                                        &mut final_plaintext_chunk,
+                                                    )
+                                                    .map_err(|_| {
+                                                            io::Error::new(
+                                                                ErrorKind::InvalidData,
+                                                                "Authentication failed on final chunk: incorrect password or corrupted data.",
+                                                            )
+                                                        })?;
+
+                                                        writer.write_all(&final_plaintext_chunk)?;
+                                                    }
+
+                                                    writer.flush()?;
+                                                    drop(writer);
+
+                                                    fs::rename(&tmp_path, &out_path)?;
+                                                    tmp_file_handler.persist();
+                                                    Ok(())
+                                                }
+
+                                                /// Recursively processes all files within a directory.
+                                                fn walk_dir(dir: &Path, pw: &Zeroizing<String>, encrypt: bool) -> io::Result<()> {
+                                                    if !dir.is_dir() {
+                                                        return Ok(());
+                                                    }
+
+                                                    for entry in fs::read_dir(dir)? {
+                                                        let path = entry?.path();
+                                                        if path.is_dir() {
+                                                            walk_dir(&path, pw, encrypt)?; // Propagate errors upwards.
+                                                        } else if encrypt {
+                                                        encrypt_file(&path, pw)?;
+                                                    } else {
+                                                    decrypt_file(&path, pw)?;
+                                                }
+                                            }
+                                            Ok(())
+                                        }
+
+                                        /// Derives a 256-bit secret key from a password and salt using Argon2id.
+                                        fn derive_key(password: &Zeroizing<String>, salt: &[u8; SALT_LEN]) -> io::Result<OrionSecretKey> {
+                                            let params = Params::new(MEMORY_COST, TIME_COST, PARALLELISM, Some(32)).map_err(|e| {
+                                                    io::Error::new(
+                                                        ErrorKind::InvalidInput,
+                                                        format!("Argon2 parameter validation failed: {}", e),
+                                                    )
+                                                })?;
+
+                                                let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+                                                let mut raw_key = Zeroizing::new([0u8; 32]);
+
+                                                argon2
+                                                .hash_password_into(password.as_bytes(), salt, raw_key.as_mut())
+                                                .map_err(|e| io::Error::other(format!("Argon2 key derivation failed: {}", e)))?;
+
+                                                OrionSecretKey::from_slice(raw_key.as_ref())
+                                                .map_err(|_| io::Error::other("Failed to initialize Orion secret key"))
+                                            }
