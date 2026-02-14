@@ -2,7 +2,7 @@
 name = "filecryption"
 version = "0.9.32"
 edition = "2024"
-rust-version = "1.93.0"
+rust-version = "1.93.1"
 description = "High-security file encryption using Argon2id and XChaCha20-Poly1305"
 repository = "https://github.com/Voornaamenachternaam/filecryption"
 homepage = "https://github.com/Voornaamenachternaam/filecryption"
