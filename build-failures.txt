@@ -1,0 +1,55 @@
+FAILED: .
+       Compiling filecryption v0.9.32 (/home/runner/work/Filecryption/Filecryption)
+    error[E0432]: unresolved import `rand::RngCore`
+     --> src/main.rs:9:5
+      |
+    9 | use rand::RngCore;
+      |     ^^^^^^^^^^^^^ no `RngCore` in the root
+    
+    error[E0599]: no method named `fill_bytes` found for struct `ThreadRng` in the current scope
+       --> src/main.rs:171:9
+        |
+    171 |     rng.fill_bytes(&mut salt);
+        |         ^^^^^^^^^^
+        |
+       ::: /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rand_core-0.10.0/src/lib.rs:62:8
+        |
+     62 |     fn fill_bytes(&mut self, dst: &mut [u8]);
+        |        ---------- the method is available for `ThreadRng` here
+        |
+        = help: items from traits can only be used if the trait is in scope
+    help: trait `Rng` which provides `fill_bytes` is implemented but not in scope; perhaps you want to import it
+        |
+      1 + use rand::Rng;
+        |
+    help: there is a method `try_fill_bytes` with a similar name
+        |
+    171 |     rng.try_fill_bytes(&mut salt);
+        |         ++++
+    
+    error[E0599]: no method named `fill_bytes` found for struct `ThreadRng` in the current scope
+       --> src/main.rs:172:9
+        |
+    172 |     rng.fill_bytes(&mut base_nonce);
+        |         ^^^^^^^^^^
+        |
+       ::: /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rand_core-0.10.0/src/lib.rs:62:8
+        |
+     62 |     fn fill_bytes(&mut self, dst: &mut [u8]);
+        |        ---------- the method is available for `ThreadRng` here
+        |
+        = help: items from traits can only be used if the trait is in scope
+    help: trait `Rng` which provides `fill_bytes` is implemented but not in scope; perhaps you want to import it
+        |
+      1 + use rand::Rng;
+        |
+    help: there is a method `try_fill_bytes` with a similar name
+        |
+    172 |     rng.try_fill_bytes(&mut base_nonce);
+        |         ++++
+    
+    Some errors have detailed explanations: E0432, E0599.
+    For more information about an error, try `rustc --explain E0432`.
+    error: could not compile `filecryption` (bin "filecryption") due to 3 previous errors
+    warning: build failed, waiting for other jobs to finish...
+    error: could not compile `filecryption` (bin "filecryption" test) due to 3 previous errors
