@@ -7,7 +7,6 @@ use std::process::exit;
 use argon2::{Algorithm, Argon2, Params, Version};
 use clap::{Parser, Subcommand};
 use orion::hazardous::aead::xchacha20poly1305::{self, Nonce, SecretKey as OrionSecretKey};
-use getrandom::getrandom;
 use rpassword::prompt_password;
 use zeroize::Zeroizing;
 
@@ -231,13 +230,13 @@ fn encrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
     let mut base_nonce = [0u8; NONCE_LEN];
 
     // Use getrandom for cryptographic randomness (OS RNG)
-    getrandom(&mut salt).map_err(|e| {
+    getrandom::getrandom(&mut salt).map_err(|e| {
         io::Error::new(
             ErrorKind::Other,
             format!("Failed to acquire randomness for salt: {}", e),
         )
     })?;
-    getrandom(&mut base_nonce).map_err(|e| {
+    getrandom::getrandom(&mut base_nonce).map_err(|e| {
         io::Error::new(
             ErrorKind::Other,
             format!("Failed to acquire randomness for nonce: {}", e),
