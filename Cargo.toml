@@ -20,6 +20,7 @@ clap = { version = "^4.5.60", features = ["derive"] }
 zeroize = { version = "^1.8.2", features = ["zeroize_derive"] }
 rand = "^0.10.0"
 windows-sys = { version = "^0.61.2", optional = true }
+getrandom = "^0.4.1"
 
 [features]
 windows-replace = ["windows-sys"]
