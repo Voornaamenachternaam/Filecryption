@@ -233,6 +233,7 @@ dependencies = [
  "argon2",
  "base64",
  "clap",
+ "getrandom 0.4.1",
  "orion",
  "rand",
  "rpassword",
