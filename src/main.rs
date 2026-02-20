@@ -25,7 +25,7 @@ const CIPHERTEXT_CHUNK_SIZE: usize = PLAINTEXT_CHUNK_SIZE + TAG_LEN;
 /// Total header size (MAGIC + SALT + NONCE).
 const HEADER_SIZE: u64 = (MAGIC.len() + SALT_LEN + NONCE_LEN) as u64;
 /// Argon2id memory cost parameter (in KiB).
-const MEMORY_COST: u32 = 1 << 16; // 2^16 KiB = 64 MiB (Aligns with default Argon2 param value 16 from KB)
+const MEMORY_COST: u32 = 1 << 16; // 2^16 KiB = 64 MiB
 /// Argon2id time cost parameter.
 const TIME_COST: u32 = 3;
 /// Argon2id parallelism parameter.
@@ -167,7 +167,7 @@ fn encrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
 
     let mut salt = [0u8; SALT_LEN];
     let mut base_nonce = [0u8; NONCE_LEN];
-    let mut rng = rand::rng(); // Fixed: Use the non-deprecated `rng()`
+    let mut rng = rand::thread_rng(); // Fixed: Use the standard thread-local RNG.
     rng.fill_bytes(&mut salt);
     rng.fill_bytes(&mut base_nonce);
 
@@ -182,11 +182,11 @@ fn encrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
     // Write the file header.
     writer.write_all(MAGIC)?;
     writer.write_all(&salt)?;
-    writer.write_all(&base_nonce)?;
+    writer.write_all(&base_nonce[0..8])?; // Write only the salt part of the nonce.
 
     // Use a pre-allocated buffer for plaintext.
     let mut plaintext_buffer = vec![0u8; PLAINTEXT_CHUNK_SIZE];
-    let mut cur_nonce = base_nonce;
+    let mut counter: u128 = 0; // Counter for the 16-byte dynamic part of the nonce.
 
     loop {
         let n = reader.read(&mut plaintext_buffer)?;
@@ -194,8 +194,13 @@ fn encrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
             break;
         }
 
-        let nonce =
-            Nonce::from_slice(&cur_nonce).map_err(|_| io::Error::other("Invalid nonce state"))?;
+        // Construct the full 24-byte nonce for this block.
+        let mut full_nonce = [0u8; NONCE_LEN];
+        full_nonce[0..8].copy_from_slice(&base_nonce[0..8]); // Copy the 8-byte salt.
+        // Encode the 16-byte counter into the last 16 bytes.
+        full_nonce[8..].copy_from_slice(&counter.to_le_bytes());
+
+        let nonce = Nonce::from_slice(&full_nonce).map_err(|_| io::Error::other("Invalid nonce state"))?;
 
         // Create an empty buffer with pre-allocated capacity for the ciphertext + tag.
         let mut ciphertext_chunk = Vec::with_capacity(n + TAG_LEN);
@@ -210,20 +215,15 @@ fn encrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
 
         writer.write_all(&ciphertext_chunk)?;
 
-        // Advance the nonce for the next chunk.
-        for i in (0..NONCE_LEN).rev() {
-            cur_nonce[i] = cur_nonce[i].wrapping_add(1);
-            if cur_nonce[i] != 0 {
-                break;
-            }
-        }
+        // Increment the counter for the next block.
+        counter += 1;
     }
 
     writer.flush()?;
     drop(writer); // Flush writer and close file handle.
 
     fs::rename(&tmp_path, &out_path)?;
-    tmp_file_handler.persist(); // Prevent cleanup on success.
+    tmp_file_handler.persist();
     Ok(())
 }
 
@@ -258,10 +258,10 @@ fn decrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
     let mut salt = [0u8; SALT_LEN];
     let mut base_nonce = [0u8; NONCE_LEN];
     reader.read_exact(&mut salt)?;
-    reader.read_exact(&mut base_nonce)?;
+    reader.read_exact(&mut base_nonce[0..8])?; // Read only the salt part of the nonce.
 
     let key = derive_key(password, &salt)?;
-    let mut cur_nonce = base_nonce;
+    let mut counter: u128 = 0; // Same counter logic for decryption.
 
     let out_path = path.with_extension("");
     let tmp_path = out_path.with_extension("tmp");
@@ -279,8 +279,12 @@ fn decrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
         let mut ciphertext_chunk = vec![0u8; CIPHERTEXT_CHUNK_SIZE];
         reader.read_exact(&mut ciphertext_chunk)?;
 
-        let nonce =
-            Nonce::from_slice(&cur_nonce).map_err(|_| io::Error::other("Invalid nonce state"))?;
+        // Construct the full 24-byte nonce for this block.
+        let mut full_nonce = [0u8; NONCE_LEN];
+        full_nonce[0..8].copy_from_slice(&base_nonce[0..8]);
+        full_nonce[8..].copy_from_slice(&counter.to_le_bytes());
+
+        let nonce = Nonce::from_slice(&full_nonce).map_err(|_| io::Error::other("Invalid nonce state"))?;
 
         let mut plaintext_chunk = Vec::with_capacity(PLAINTEXT_CHUNK_SIZE);
         xchacha20poly1305::open(&key, &nonce, &ciphertext_chunk, None, &mut plaintext_chunk)
@@ -293,13 +297,8 @@ fn decrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
 
         writer.write_all(&plaintext_chunk)?;
 
-        // Advance the nonce for the next chunk.
-        for i in (0..NONCE_LEN).rev() {
-            cur_nonce[i] = cur_nonce[i].wrapping_add(1);
-            if cur_nonce[i] != 0 {
-                break;
-            }
-        }
+        // Increment the counter for the next block.
+        counter += 1;
     }
 
     // Process the final, potentially short, chunk.
@@ -313,8 +312,12 @@ fn decrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
         let mut final_ciphertext_chunk = vec![0u8; final_chunk_size];
         reader.read_exact(&mut final_ciphertext_chunk)?;
 
-        let nonce =
-            Nonce::from_slice(&cur_nonce).map_err(|_| io::Error::other("Invalid nonce state"))?;
+        // Construct the full 24-byte nonce for this block.
+        let mut full_nonce = [0u8; NONCE_LEN];
+        full_nonce[0..8].copy_from_slice(&base_nonce[0..8]);
+        full_nonce[8..].copy_from_slice(&counter.to_le_bytes());
+
+        let nonce = Nonce::from_slice(&full_nonce).map_err(|_| io::Error::other("Invalid nonce state"))?;
 
         let mut final_plaintext_chunk = Vec::with_capacity(final_chunk_size - TAG_LEN);
         xchacha20poly1305::open(
@@ -351,7 +354,7 @@ fn walk_dir(dir: &Path, pw: &Zeroizing<String>, encrypt: bool) -> io::Result<()>
     for entry in fs::read_dir(dir)? {
         let path = entry?.path();
         if path.is_dir() {
-            walk_dir(&path, pw, encrypt)?; // Propagate errors upwards.
+            walk_dir(&path, pw, encrypt)?;
         } else if encrypt {
             encrypt_file(&path, pw)?;
         } else {
