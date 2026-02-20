@@ -7,7 +7,7 @@ use std::process::exit;
 use argon2::{Algorithm, Argon2, Params, Version};
 use clap::{Parser, Subcommand};
 use orion::hazardous::aead::xchacha20poly1305::{self, Nonce, SecretKey as OrionSecretKey};
-use rand::RngCore;
+use rand::Rng;
 use rpassword::prompt_password;
 use zeroize::Zeroizing;
 
@@ -191,26 +191,18 @@ fn perform_dummy_open() {
 /// On Windows, when the feature `windows-replace` is enabled we call ReplaceFileW via windows-sys.
 /// Otherwise fall back to robust rename semantics with fallback.
 fn atomic_replace(temp: &Path, dest: &Path) -> io::Result<()> {
-    // Prefer to attempt platform-specific atomic replace. If platform-specific fails/falls-through,
-    // fallback to a safe rename/remove-then-rename pattern.
     #[cfg(all(windows, feature = "windows-replace"))]
     {
-        // Use ReplaceFileW via windows-sys
         if let Err(e) = crate::windows_replace::replace_file_atomic(temp, dest) {
-            // fallback to standard logic
             eprintln!("windows ReplaceFileW failed: {}. Falling back to rename-remove-rename.", e);
         } else {
             return Ok(());
         }
     }
 
-    // Non-windows or fallback:
-    // Try rename (atomic on same filesystem). If rename errors because target exists on Windows, remove and retry.
     match fs::rename(temp, dest) {
         Ok(()) => Ok(()),
         Err(e) => {
-            // On Windows, rename may fail if dest exists. Try to remove dest and rename again.
-            // This is less atomic than ReplaceFileW but robust in many cases.
             if dest.exists() {
                 fs::remove_file(dest)?;
                 fs::rename(temp, dest)?;
@@ -237,9 +229,9 @@ fn encrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
 
     let mut salt = [0u8; SALT_LEN];
     let mut base_nonce = [0u8; NONCE_LEN];
-    let mut rng = rand::rng();
-    rng.fill_bytes(&mut salt);
-    rng.fill_bytes(&mut base_nonce);
+    let mut rng = rand::thread_rng();
+    rng.fill(&mut salt);
+    rng.fill(&mut base_nonce);
 
     // Derive key once (normal flow).
     let key = derive_key(password, &salt)?;
