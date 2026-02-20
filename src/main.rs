@@ -1,3 +1,4 @@
+// src/main.rs
 use std::fs::{self, File};
 use std::io::{self, BufReader, BufWriter, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
@@ -25,7 +26,7 @@ const CIPHERTEXT_CHUNK_SIZE: usize = PLAINTEXT_CHUNK_SIZE + TAG_LEN;
 /// Total header size (MAGIC + SALT + NONCE).
 const HEADER_SIZE: u64 = (MAGIC.len() + SALT_LEN + NONCE_LEN) as u64;
 /// Argon2id memory cost parameter (in KiB).
-const MEMORY_COST: u32 = 1 << 16; // 2^16 KiB = 64 MiB (Aligns with default Argon2 param value 16 from KB)
+const MEMORY_COST: u32 = 1 << 16; // 64 MiB
 /// Argon2id time cost parameter.
 const TIME_COST: u32 = 3;
 /// Argon2id parallelism parameter.
@@ -38,23 +39,20 @@ struct TempFile {
 }
 
 impl TempFile {
-    /// Creates a new empty file at the given path.
     fn create(path: &Path) -> io::Result<Self> {
-        let _ = File::create(path)?;
+        File::create(path)?;
         Ok(TempFile {
             path: path.to_path_buf(),
             active: true,
         })
     }
 
-    /// Marks the temporary file as persisted, preventing its deletion on drop.
     fn persist(mut self) {
         self.active = false;
     }
 }
 
 impl Drop for TempFile {
-    /// Deletes the tracked file if it is still marked as active.
     fn drop(&mut self) {
         if self.active {
             let _ = fs::remove_file(&self.path);
@@ -62,7 +60,7 @@ impl Drop for TempFile {
     }
 }
 
-/// Command Line Interface definition using Clap.
+/// Command Line Interface definition using Clap 4.5+
 #[derive(Parser)]
 #[command(
     name = "filecryption",
@@ -79,13 +77,9 @@ struct Cli {
 /// Enumeration of supported commands.
 #[derive(Subcommand)]
 enum Command {
-    /// Encrypt a single file.
     Encrypt { file: PathBuf },
-    /// Decrypt a single file.
     Decrypt { file: PathBuf },
-    /// Recursively encrypt all files in a directory.
     EncryptDir { dir: PathBuf },
-    /// Recursively decrypt all files in a directory.
     DecryptDir { dir: PathBuf },
 }
 
@@ -95,41 +89,41 @@ fn main() {
     match cli.command {
         Command::Encrypt { file } => {
             let pw = prompt_password_secure(true).unwrap_or_else(|e| {
-                eprintln!("Password prompt failed: {}", e);
+                eprintln!("Password prompt failed: {e}");
                 exit(1);
             });
             if let Err(e) = encrypt_file(&file, &pw) {
-                eprintln!("Encryption of '{}' failed: {}", file.display(), e);
+                eprintln!("Encryption of '{}' failed: {e}", file.display());
                 exit(1);
             }
         }
         Command::Decrypt { file } => {
             let pw = prompt_password_secure(false).unwrap_or_else(|e| {
-                eprintln!("Password prompt failed: {}", e);
+                eprintln!("Password prompt failed: {e}");
                 exit(1);
             });
             if let Err(e) = decrypt_file(&file, &pw) {
-                eprintln!("Decryption of '{}' failed: {}", file.display(), e);
+                eprintln!("Decryption of '{}' failed: {e}", file.display());
                 exit(1);
             }
         }
         Command::EncryptDir { dir } => {
             let pw = prompt_password_secure(true).unwrap_or_else(|e| {
-                eprintln!("Password prompt failed: {}", e);
+                eprintln!("Password prompt failed: {e}");
                 exit(1);
             });
             if let Err(e) = walk_dir(&dir, &pw, true) {
-                eprintln!("Directory encryption of '{}' failed: {}", dir.display(), e);
+                eprintln!("Directory encryption of '{}' failed: {e}", dir.display());
                 exit(1);
             }
         }
         Command::DecryptDir { dir } => {
             let pw = prompt_password_secure(false).unwrap_or_else(|e| {
-                eprintln!("Password prompt failed: {}", e);
+                eprintln!("Password prompt failed: {e}");
                 exit(1);
             });
             if let Err(e) = walk_dir(&dir, &pw, false) {
-                eprintln!("Directory decryption of '{}' failed: {}", dir.display(), e);
+                eprintln!("Directory decryption of '{}' failed: {e}", dir.display());
                 exit(1);
             }
         }
@@ -153,6 +147,81 @@ fn prompt_password_secure(confirm: bool) -> io::Result<Zeroizing<String>> {
     Ok(Zeroizing::new(pw))
 }
 
+/// Constant-time equality for byte slices (returns true if equal).
+#[inline(always)]
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff: u8 = 0;
+    for i in 0..a.len() {
+        diff |= a[i] ^ b[i];
+    }
+    diff == 0
+}
+
+/// Increment nonce and detect full wrap-around (error on wrap).
+fn increment_nonce_checked(nonce: &mut [u8; NONCE_LEN]) -> Result<(), &'static str> {
+    for byte in nonce.iter_mut().rev() {
+        let (new, carry) = byte.overflowing_add(1);
+        *byte = new;
+        if !carry {
+            return Ok(());
+        }
+    }
+    // wrap-around happened — treat as fatal (defensive)
+    Err("nonce wrap-around detected")
+}
+
+/// Helper: perform a small dummy AEAD open to normalize timing (used when header/magic mismatch).
+fn perform_dummy_open() {
+    // This function should not panic; ignore any errors. Purpose: consume some AEAD-time.
+    let zero_key = OrionSecretKey::from_slice(&[0u8; 32]);
+    if let Ok(k) = zero_key {
+        if let Ok(n) = Nonce::from_slice(&[0u8; NONCE_LEN]) {
+            // Small dummy ciphertext (must be at least TAG_LEN to be plausible)
+            let dummy_ct = vec![0u8; TAG_LEN + 1];
+            let mut _out = Vec::new();
+            let _ = xchacha20poly1305::open(&k, &n, &dummy_ct, None, &mut _out);
+        }
+    }
+}
+
+/// Cross-platform atomic replace helper.
+/// On Windows, when the feature `windows-replace` is enabled we call ReplaceFileW via windows-sys.
+/// Otherwise fall back to robust rename semantics with fallback.
+fn atomic_replace(temp: &Path, dest: &Path) -> io::Result<()> {
+    // Prefer to attempt platform-specific atomic replace. If platform-specific fails/falls-through,
+    // fallback to a safe rename/remove-then-rename pattern.
+    #[cfg(all(windows, feature = "windows-replace"))]
+    {
+        // Use ReplaceFileW via windows-sys
+        if let Err(e) = crate::windows_replace::replace_file_atomic(temp, dest) {
+            // fallback to standard logic
+            eprintln!("windows ReplaceFileW failed: {}. Falling back to rename-remove-rename.", e);
+        } else {
+            return Ok(());
+        }
+    }
+
+    // Non-windows or fallback:
+    // Try rename (atomic on same filesystem). If rename errors because target exists on Windows, remove and retry.
+    match fs::rename(temp, dest) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            // On Windows, rename may fail if dest exists. Try to remove dest and rename again.
+            // This is less atomic than ReplaceFileW but robust in many cases.
+            if dest.exists() {
+                fs::remove_file(dest)?;
+                fs::rename(temp, dest)?;
+                Ok(())
+            } else {
+                Err(e)
+            }
+        }
+    }
+}
+
 /// Encrypts a single file using XChaCha20-Poly1305 and Argon2id.
 fn encrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
     let out_path = path.with_extension("enc");
@@ -163,14 +232,16 @@ fn encrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
             "Output file already exists.",
         ));
     }
+    // Create temp in same directory to ensure rename/replace works on same volume.
     let tmp_path = out_path.with_extension("tmp");
 
     let mut salt = [0u8; SALT_LEN];
     let mut base_nonce = [0u8; NONCE_LEN];
-    let mut rng = rand::rng(); // Fixed: Use the non-deprecated `rng()`
+    let mut rng = rand::rng();
     rng.fill_bytes(&mut salt);
     rng.fill_bytes(&mut base_nonce);
 
+    // Derive key once (normal flow).
     let key = derive_key(password, &salt)?;
 
     let input = File::open(path)?;
@@ -179,10 +250,17 @@ fn encrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
     let output = File::create(&tmp_path)?;
     let mut writer = BufWriter::new(output);
 
-    // Write the file header.
+    // Write the file header (MAGIC | salt | base_nonce).
     writer.write_all(MAGIC)?;
     writer.write_all(&salt)?;
     writer.write_all(&base_nonce)?;
+    writer.flush()?; // flush header so AAD matches file layout if someone inspects file early.
+
+    // Compose AAD = header bytes so header gets authenticated.
+    let mut aad = Vec::with_capacity(MAGIC.len() + SALT_LEN + NONCE_LEN);
+    aad.extend_from_slice(MAGIC);
+    aad.extend_from_slice(&salt);
+    aad.extend_from_slice(&base_nonce);
 
     // Use a pre-allocated buffer for plaintext.
     let mut plaintext_buffer = vec![0u8; PLAINTEXT_CHUNK_SIZE];
@@ -194,8 +272,7 @@ fn encrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
             break;
         }
 
-        let nonce =
-            Nonce::from_slice(&cur_nonce).map_err(|_| io::Error::other("Invalid nonce state"))?;
+        let nonce = Nonce::from_slice(&cur_nonce).map_err(|_| io::Error::other("Invalid nonce state"))?;
 
         // Create an empty buffer with pre-allocated capacity for the ciphertext + tag.
         let mut ciphertext_chunk = Vec::with_capacity(n + TAG_LEN);
@@ -203,26 +280,22 @@ fn encrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
             &key,
             &nonce,
             &plaintext_buffer[..n],
-            None,
+            Some(&aad),
             &mut ciphertext_chunk,
         )
         .map_err(|_| io::Error::other("AEAD seal operation failed"))?;
 
         writer.write_all(&ciphertext_chunk)?;
 
-        // Advance the nonce for the next chunk.
-        for i in (0..NONCE_LEN).rev() {
-            cur_nonce[i] = cur_nonce[i].wrapping_add(1);
-            if cur_nonce[i] != 0 {
-                break;
-            }
-        }
+        // Advance the nonce for the next chunk. Error if wrap-around would happen.
+        increment_nonce_checked(&mut cur_nonce).map_err(|_| io::Error::other("nonce wrap-around"))?;
     }
 
     writer.flush()?;
-    drop(writer); // Flush writer and close file handle.
+    drop(writer);
 
-    fs::rename(&tmp_path, &out_path)?;
+    // Atomic replace (platform-specific inside)
+    atomic_replace(&tmp_path, &out_path)?;
     tmp_file_handler.persist(); // Prevent cleanup on success.
     Ok(())
 }
@@ -246,21 +319,34 @@ fn decrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
 
     let mut reader = BufReader::new(&input);
 
+    // Read header fields
     let mut magic = [0u8; 8];
     reader.read_exact(&mut magic)?;
-    if &magic != MAGIC {
-        return Err(io::Error::new(
-            ErrorKind::InvalidData,
-            "Invalid file format: MAGIC header mismatch",
-        ));
-    }
-
     let mut salt = [0u8; SALT_LEN];
     let mut base_nonce = [0u8; NONCE_LEN];
     reader.read_exact(&mut salt)?;
     reader.read_exact(&mut base_nonce)?;
 
+    // Compose AAD (same bytes used during encryption).
+    let mut aad = Vec::with_capacity(MAGIC.len() + SALT_LEN + NONCE_LEN);
+    aad.extend_from_slice(MAGIC);
+    aad.extend_from_slice(&salt);
+    aad.extend_from_slice(&base_nonce);
+
+    // ALWAYS derive Argon2 key (prevents timing oracle revealing header mismatch vs KDF cost).
     let key = derive_key(password, &salt)?;
+
+    // Constant-time check of MAGIC
+    let magic_ok = constant_time_eq(&magic, MAGIC);
+
+    // If magic mismatch: perform a dummy AEAD open to consume similar AEAD-time and return a generic error.
+    if !magic_ok {
+        // consume some AEAD time: call dummy open (silent)
+        perform_dummy_open();
+        return Err(io::Error::new(ErrorKind::InvalidData, "Decryption failed"));
+    }
+
+    // Continue normally
     let mut cur_nonce = base_nonce;
 
     let out_path = path.with_extension("");
@@ -279,11 +365,10 @@ fn decrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
         let mut ciphertext_chunk = vec![0u8; CIPHERTEXT_CHUNK_SIZE];
         reader.read_exact(&mut ciphertext_chunk)?;
 
-        let nonce =
-            Nonce::from_slice(&cur_nonce).map_err(|_| io::Error::other("Invalid nonce state"))?;
+        let nonce = Nonce::from_slice(&cur_nonce).map_err(|_| io::Error::other("Invalid nonce state"))?;
 
         let mut plaintext_chunk = Vec::with_capacity(PLAINTEXT_CHUNK_SIZE);
-        xchacha20poly1305::open(&key, &nonce, &ciphertext_chunk, None, &mut plaintext_chunk)
+        xchacha20poly1305::open(&key, &nonce, &ciphertext_chunk, Some(&aad), &mut plaintext_chunk)
             .map_err(|_| {
                 io::Error::new(
                     ErrorKind::InvalidData,
@@ -294,12 +379,7 @@ fn decrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
         writer.write_all(&plaintext_chunk)?;
 
         // Advance the nonce for the next chunk.
-        for i in (0..NONCE_LEN).rev() {
-            cur_nonce[i] = cur_nonce[i].wrapping_add(1);
-            if cur_nonce[i] != 0 {
-                break;
-            }
-        }
+        increment_nonce_checked(&mut cur_nonce).map_err(|_| io::Error::other("nonce wrap-around"))?;
     }
 
     // Process the final, potentially short, chunk.
@@ -313,15 +393,14 @@ fn decrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
         let mut final_ciphertext_chunk = vec![0u8; final_chunk_size];
         reader.read_exact(&mut final_ciphertext_chunk)?;
 
-        let nonce =
-            Nonce::from_slice(&cur_nonce).map_err(|_| io::Error::other("Invalid nonce state"))?;
+        let nonce = Nonce::from_slice(&cur_nonce).map_err(|_| io::Error::other("Invalid nonce state"))?;
 
         let mut final_plaintext_chunk = Vec::with_capacity(final_chunk_size - TAG_LEN);
         xchacha20poly1305::open(
             &key,
             &nonce,
             &final_ciphertext_chunk,
-            None,
+            Some(&aad),
             &mut final_plaintext_chunk,
         )
         .map_err(|_| {
@@ -337,7 +416,7 @@ fn decrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
     writer.flush()?;
     drop(writer);
 
-    fs::rename(&tmp_path, &out_path)?;
+    atomic_replace(&tmp_path, &out_path)?;
     tmp_file_handler.persist();
     Ok(())
 }
@@ -379,4 +458,41 @@ fn derive_key(password: &Zeroizing<String>, salt: &[u8; SALT_LEN]) -> io::Result
 
     OrionSecretKey::from_slice(raw_key.as_ref())
         .map_err(|_| io::Error::other("Failed to initialize Orion secret key"))
+}
+
+#[cfg(all(windows, feature = "windows-replace"))]
+mod windows_replace {
+    use std::ffi::OsStr;
+    use std::io;
+    use std::os::windows::ffi::OsStrExt;
+    use std::path::Path;
+    // windows-sys = "0.61.2" is expected in Cargo.toml under [dependencies] as optional.
+    use windows_sys::Win32::Storage::FileSystem::ReplaceFileW;
+
+    fn to_wide(s: &OsStr) -> Vec<u16> {
+        s.encode_wide().chain(std::iter::once(0)).collect()
+    }
+
+    /// Replace dest with src atomically using ReplaceFileW.
+    pub fn replace_file_atomic(src: &Path, dest: &Path) -> io::Result<()> {
+        let src_w = to_wide(src.as_os_str());
+        let dest_w = to_wide(dest.as_os_str());
+
+        // ReplaceFileW(dest, src, NULL, 0, NULL, NULL)
+        let ok = unsafe {
+            ReplaceFileW(
+                dest_w.as_ptr(),
+                src_w.as_ptr(),
+                std::ptr::null(),
+                0,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        if ok == 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    }
 }
