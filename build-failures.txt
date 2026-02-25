@@ -1,0 +1,18 @@
+FAILED: .
+       Compiling filecryption v0.9.32 (/home/runner/work/Filecryption/Filecryption)
+    error[E0425]: cannot find function `getrandom` in crate `getrandom`
+       --> src/main.rs:233:16
+        |
+    233 |     getrandom::getrandom(&mut salt).map_err(|e| {
+        |                ^^^^^^^^^ not found in `getrandom`
+    
+    error[E0425]: cannot find function `getrandom` in crate `getrandom`
+       --> src/main.rs:239:16
+        |
+    239 |     getrandom::getrandom(&mut base_nonce).map_err(|e| {
+        |                ^^^^^^^^^ not found in `getrandom`
+    
+    For more information about this error, try `rustc --explain E0425`.
+    error: could not compile `filecryption` (bin "filecryption" test) due to 2 previous errors
+    warning: build failed, waiting for other jobs to finish...
+    error: could not compile `filecryption` (bin "filecryption") due to 2 previous errors
