@@ -24,7 +24,7 @@ jobs:
 
       # 2️⃣ Install Rust toolchain and Clippy (replaces dtolnay/rust-toolchain)
       - name: Install Rust toolchain and Clippy
-        uses: actions-rust-lang/setup-rust-toolchain@v1.15.2
+        uses: actions-rust-lang/setup-rust-toolchain@v1.15.3
         with:
           toolchain: stable
           components: clippy
