@@ -12,7 +12,7 @@ categories = ["cryptography"]
 publish = false
 
 [dependencies]
-orion = { version = "^0.17.12", features = ["default"] }
+orion = { version = "^0.17.13", features = ["default"] }
 argon2 = { version = "^0.5.3", default-features = false, features = ["std"] }
 base64 = "^0.22.1"
 rpassword = "^7.4.0"
