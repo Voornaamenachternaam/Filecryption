@@ -7,6 +7,8 @@ on:
 
 jobs:
   try-fix:
+    # This prevents the action from running on its own auto-fix branches
+    if: startsWith(github.head_ref, 'auto-fix/') == false && startsWith(github.ref_name, 'auto-fix/') == false
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -63,6 +65,8 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           commit-message: "[auto-fix] apply cargo fix / clippy fixes"
+          # Fix: Explicitly define the base branch to avoid "detached HEAD" errors
+          base: ${{ github.head_ref || github.ref_name }}
           branch: auto-fix/${{ github.run_id }}
           title: "[auto-fix] Attempt fixes from cargo/clippy"
           body: |

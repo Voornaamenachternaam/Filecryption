@@ -176,14 +176,12 @@ fn increment_nonce_checked(nonce: &mut [u8; NONCE_LEN]) -> Result<(), &'static s
 fn perform_dummy_open() {
     // This function should not panic; ignore any errors. Purpose: consume some AEAD-time.
     let zero_key = OrionSecretKey::from_slice(&[0u8; 32]);
-    if let Ok(k) = zero_key {
-        if let Ok(n) = Nonce::from_slice(&[0u8; NONCE_LEN]) {
-            // Small dummy ciphertext (must be at least TAG_LEN to be plausible)
-            let dummy_ct = vec![0u8; TAG_LEN + 1];
-            let mut _out = Vec::new();
-            let _ = xchacha20poly1305::open(&k, &n, &dummy_ct, None, &mut _out);
-        }
-    }
+    if let (Ok(k), Ok(n)) = (zero_key, Nonce::from_slice(&[0u8; NONCE_LEN])) {
+        // Small dummy ciphertext (must be at least TAG_LEN to be plausible)
+        let dummy_ct = vec![0u8; TAG_LEN + 1];
+        let mut _out = Vec::new();
+        let _ = xchacha20poly1305::open(&k, &n, &dummy_ct, None, &mut _out);
+}
 }
 
 /// Cross-platform atomic replace helper.
@@ -230,18 +228,10 @@ fn encrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
     let mut base_nonce = [0u8; NONCE_LEN];
 
     // Use getrandom for cryptographic randomness (OS RNG)
-    getrandom::getrandom(&mut salt).map_err(|e| {
-        io::Error::new(
-            ErrorKind::Other,
-            format!("Failed to acquire randomness for salt: {}", e),
-        )
-    })?;
-    getrandom::getrandom(&mut base_nonce).map_err(|e| {
-        io::Error::new(
-            ErrorKind::Other,
-            format!("Failed to acquire randomness for nonce: {}", e),
-        )
-    })?;
+    getrandom::fill(&mut salt)
+        .map_err(|e| io::Error::other(format!("Failed to acquire randomness for salt: {e}")))?;
+    getrandom::fill(&mut base_nonce)
+        .map_err(|e| io::Error::other(format!("Failed to acquire randomness for nonce: {e}")))?;
 
     // Derive key once (normal flow).
     let key = derive_key(password, &salt)?;
