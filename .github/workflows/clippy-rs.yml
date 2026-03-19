@@ -136,8 +136,9 @@ jobs:
 
       - name: Create Pull Request
         if: steps.clippy_run.outputs.fixes_applied == 'true' && steps.commit_fixes.outputs.pr_branch != ''
-        uses: peter-evans/create-or-update-comment@v5.0.0
+        uses: peter-evans/create-pull-request@v7
         with:
+          token: ${{ secrets.GITHUB_TOKEN }}
           title: "Apply Clippy auto-fixes"
           body: |
             This PR applies automatic Clippy fixes to the codebase.

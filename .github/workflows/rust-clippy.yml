@@ -35,10 +35,8 @@ jobs:
       - name: Setup Rust toolchain (dtolnay/rust-toolchain)
         uses: dtolnay/rust-toolchain@master
         with:
-          profile: minimal
           toolchain: stable
           components: clippy
-          override: true
 
       - name: Ensure clippy component is available
         run: |
@@ -93,6 +91,7 @@ jobs:
         with:
           # Provide the branch that was created locally.
           branch: ${{ steps.commit-fixes.outputs.created_branch }}
+          base: main
           # Do NOT set `title` or `body` so the action will generate them automatically.
           # Ensure the action updates the PR title/body automatically (default behavior);
           # set this explicitly to true for clarity.

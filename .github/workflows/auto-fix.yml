@@ -21,7 +21,6 @@ jobs:
         with:
           toolchain: stable
           components: clippy,rustfmt
-          override: true
 
       - name: Cache cargo registry & target
         continue-on-error: true
@@ -64,6 +63,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           commit-message: "[auto-fix] apply cargo fix / clippy fixes"
           branch: auto-fix/${{ github.run_id }}
+          base: main
           title: "[auto-fix] Attempt fixes from cargo/clippy"
           body: |
             This PR contains automatic fixes from cargo fix / clippy --fix / rustfmt applied by CI.
