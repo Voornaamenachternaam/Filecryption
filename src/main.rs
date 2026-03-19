@@ -181,7 +181,7 @@ fn perform_dummy_open() {
         let dummy_ct = vec![0u8; TAG_LEN + 1];
         let mut _out = Vec::new();
         let _ = xchacha20poly1305::open(&k, &n, &dummy_ct, None, &mut _out);
-}
+    }
 }
 
 /// Cross-platform atomic replace helper.
@@ -191,7 +191,10 @@ fn atomic_replace(temp: &Path, dest: &Path) -> io::Result<()> {
     #[cfg(all(windows, feature = "windows-replace"))]
     {
         if let Err(e) = crate::windows_replace::replace_file_atomic(temp, dest) {
-            eprintln!("windows ReplaceFileW failed: {}. Falling back to rename-remove-rename.", e);
+            eprintln!(
+                "windows ReplaceFileW failed: {}. Falling back to rename-remove-rename.",
+                e
+            );
         } else {
             return Ok(());
         }
@@ -264,7 +267,8 @@ fn encrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
             break;
         }
 
-        let nonce = Nonce::from_slice(&cur_nonce).map_err(|_| io::Error::other("Invalid nonce state"))?;
+        let nonce =
+            Nonce::from_slice(&cur_nonce).map_err(|_| io::Error::other("Invalid nonce state"))?;
 
         // Create an empty buffer with pre-allocated capacity for the ciphertext + tag.
         let mut ciphertext_chunk = Vec::with_capacity(n + TAG_LEN);
@@ -280,7 +284,8 @@ fn encrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
         writer.write_all(&ciphertext_chunk)?;
 
         // Advance the nonce for the next chunk. Error if wrap-around would happen.
-        increment_nonce_checked(&mut cur_nonce).map_err(|_| io::Error::other("nonce wrap-around"))?;
+        increment_nonce_checked(&mut cur_nonce)
+            .map_err(|_| io::Error::other("nonce wrap-around"))?;
     }
 
     writer.flush()?;
@@ -357,21 +362,29 @@ fn decrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
         let mut ciphertext_chunk = vec![0u8; CIPHERTEXT_CHUNK_SIZE];
         reader.read_exact(&mut ciphertext_chunk)?;
 
-        let nonce = Nonce::from_slice(&cur_nonce).map_err(|_| io::Error::other("Invalid nonce state"))?;
+        let nonce =
+            Nonce::from_slice(&cur_nonce).map_err(|_| io::Error::other("Invalid nonce state"))?;
 
         let mut plaintext_chunk = Vec::with_capacity(PLAINTEXT_CHUNK_SIZE);
-        xchacha20poly1305::open(&key, &nonce, &ciphertext_chunk, Some(&aad), &mut plaintext_chunk)
-            .map_err(|_| {
-                io::Error::new(
-                    ErrorKind::InvalidData,
-                    "Authentication failed: incorrect password or corrupted data.",
-                )
-            })?;
+        xchacha20poly1305::open(
+            &key,
+            &nonce,
+            &ciphertext_chunk,
+            Some(&aad),
+            &mut plaintext_chunk,
+        )
+        .map_err(|_| {
+            io::Error::new(
+                ErrorKind::InvalidData,
+                "Authentication failed: incorrect password or corrupted data.",
+            )
+        })?;
 
         writer.write_all(&plaintext_chunk)?;
 
         // Advance the nonce for the next chunk.
-        increment_nonce_checked(&mut cur_nonce).map_err(|_| io::Error::other("nonce wrap-around"))?;
+        increment_nonce_checked(&mut cur_nonce)
+            .map_err(|_| io::Error::other("nonce wrap-around"))?;
     }
 
     // Process the final, potentially short, chunk.
@@ -385,7 +398,8 @@ fn decrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
         let mut final_ciphertext_chunk = vec![0u8; final_chunk_size];
         reader.read_exact(&mut final_ciphertext_chunk)?;
 
-        let nonce = Nonce::from_slice(&cur_nonce).map_err(|_| io::Error::other("Invalid nonce state"))?;
+        let nonce =
+            Nonce::from_slice(&cur_nonce).map_err(|_| io::Error::other("Invalid nonce state"))?;
 
         let mut final_plaintext_chunk = Vec::with_capacity(final_chunk_size - TAG_LEN);
         xchacha20poly1305::open(
