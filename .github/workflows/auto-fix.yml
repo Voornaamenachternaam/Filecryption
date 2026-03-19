@@ -7,7 +7,6 @@ on:
 
 jobs:
   try-fix:
-    # This prevents the action from running on its own auto-fix branches
     if: startsWith(github.head_ref, 'auto-fix/') == false && startsWith(github.ref_name, 'auto-fix/') == false
     runs-on: ubuntu-latest
     permissions:
@@ -38,40 +37,33 @@ jobs:
 
       - name: Run initial build & tests
         continue-on-error: true
-        run: |
-          cargo test --workspace
+        run: cargo test --workspace
 
-      - name: Try cargo fix (compiler fixes)
+      - name: Try cargo fix
         continue-on-error: true
-        run: |
-          cargo fix --workspace --allow-dirty --allow-staged || true
+        run: cargo fix --workspace --allow-dirty --allow-staged || true
 
-      - name: Record files changed by cargo fix
-        id: cargo_fix_changes
-        shell: bash
-        run: |
-          git diff --name-only > /tmp/cargo_fix_files.txt || true
-          if [ -s /tmp/cargo_fix_files.txt ]; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          fi
+      - name: Snapshot state after cargo fix
+        run: git diff --binary > /tmp/after_cargo_fix.patch || true
 
       - name: Try clippy auto-fixes
         continue-on-error: true
-        run: |
-          cargo clippy --all-targets --all-features --workspace --fix --allow-dirty --allow-staged || true
+        run: cargo clippy --all-targets --all-features --workspace --fix --allow-dirty --allow-staged || true
 
       - name: Run rustfmt
         continue-on-error: true
-        run: |
-          cargo fmt --all
+        run: cargo fmt --all
 
-      - name: Detect any remaining workspace changes
+      - name: Detect changes introduced by clippy or rustfmt
         id: detect_changes
         shell: bash
         run: |
-          if git diff --quiet; then
+          git diff --binary > /tmp/final.patch || true
+          if [ ! -s /tmp/final.patch ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if cmp -s /tmp/after_cargo_fix.patch /tmp/final.patch; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
@@ -79,16 +71,15 @@ jobs:
 
       - name: Re-run tests
         continue-on-error: true
-        run: |
-          cargo test --workspace
+        run: cargo test --workspace
 
-      - name: Create branch & PR if clippy/fmt changed files cargo fix did not touch
-        if: steps.detect_changes.outputs.changed == 'true' && (github.event_name == 'pull_request' || github.ref_type == 'branch')
+      - name: Create branch and pull request
+        if: steps.detect_changes.outputs.changed == 'true'
         uses: peter-evans/create-pull-request@v8.0.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           commit-message: "[auto-fix] apply cargo fix / clippy fixes"
-          base: ${{ github.head_ref || github.ref_name }}
+          base: ${{ github.event_name == 'pull_request' && github.base_ref || github.ref_name }}
           branch: auto-fix/${{ github.run_id }}
           title: "[auto-fix] Attempt fixes from cargo/clippy"
           body: |
