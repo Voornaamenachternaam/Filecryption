@@ -230,13 +230,13 @@ fn encrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
     let mut base_nonce = [0u8; NONCE_LEN];
 
     // Use getrandom for cryptographic randomness (OS RNG)
-    getrandom::getrandom(&mut salt).map_err(|e| {
+    getrandom::fill(&mut salt).map_err(|e| {
         io::Error::new(
             ErrorKind::Other,
             format!("Failed to acquire randomness for salt: {}", e),
         )
     })?;
-    getrandom::getrandom(&mut base_nonce).map_err(|e| {
+    getrandom::fill(&mut base_nonce).map_err(|e| {
         io::Error::new(
             ErrorKind::Other,
             format!("Failed to acquire randomness for nonce: {}", e),
