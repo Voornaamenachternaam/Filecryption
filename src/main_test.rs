@@ -52,9 +52,15 @@ mod tests {
         loop {
             let n1 = file1.read(&mut buf1)?;
             let n2 = file2.read(&mut buf2)?;
-            if n1 != n2 { return Ok(false); }
-            if n1 == 0 { break; }
-            if buf1[..n1] != buf2[..n2] { return Ok(false); }
+            if n1 != n2 {
+                return Ok(false);
+            }
+            if n1 == 0 {
+                break;
+            }
+            if buf1[..n1] != buf2[..n2] {
+                return Ok(false);
+            }
         }
         Ok(true)
     }
@@ -268,8 +274,10 @@ mod tests {
         let pw = Zeroizing::new("secret".to_string());
         walk_dir(&td, &pw, true).unwrap();
 
-        assert!(!f1.exists()); assert!(f1.with_extension("txt.enc").exists());
-        assert!(!f2.exists()); assert!(f2.with_extension("txt.enc").exists());
+        assert!(!f1.exists());
+        assert!(f1.with_extension("txt.enc").exists());
+        assert!(!f2.exists());
+        assert!(f2.with_extension("txt.enc").exists());
 
         cleanup_temp_dir(&td).unwrap();
     }
@@ -296,8 +304,10 @@ mod tests {
         // Then decrypt them
         walk_dir(&td, &pw, false).unwrap();
 
-        assert!(!e1.exists()); assert!(f1.exists());
-        assert!(!e2.exists()); assert!(f2.exists());
+        assert!(!e1.exists());
+        assert!(f1.exists());
+        assert!(!e2.exists());
+        assert!(f2.exists());
 
         cleanup_temp_dir(&td).unwrap();
     }
@@ -345,10 +355,14 @@ mod tests {
         use clap::Parser;
 
         let encrypt = Cli::try_parse_from(["filecryption", "encrypt", "test.txt"]).unwrap();
-        assert!(matches!(encrypt.command, Command::Encrypt{file} if file.to_str() == Some("test.txt")));
+        assert!(
+            matches!(encrypt.command, Command::Encrypt{file} if file.to_str() == Some("test.txt"))
+        );
 
         let decrypt = Cli::try_parse_from(["filecryption", "decrypt", "test.txt.enc"]).unwrap();
-        assert!(matches!(decrypt.command, Command::Decrypt{file} if file.to_str() == Some("test.txt.enc")));
+        assert!(
+            matches!(decrypt.command, Command::Decrypt{file} if file.to_str() == Some("test.txt.enc"))
+        );
 
         let enc_dir = Cli::try_parse_from(["filecryption", "encrypt-dir", "dir"]).unwrap();
         assert!(matches!(enc_dir.command, Command::EncryptDir{dir} if dir.to_str() == Some("dir")));
