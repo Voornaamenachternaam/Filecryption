@@ -228,9 +228,10 @@ fn encrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
     let mut base_nonce = [0u8; NONCE_LEN];
 
     // Use getrandom for cryptographic randomness (OS RNG)
-    getrandom::fill(&mut salt).map_err(|e| io::Error::other(format!("Failed to acquire randomness for salt: {}", e)))?;
+    getrandom::fill(&mut salt)
+        .map_err(|e| io::Error::other(format!("Failed to acquire randomness for salt: {e}")))?;
     getrandom::fill(&mut base_nonce)
-        .map_err(|e| io::Error::other(format!("Failed to acquire randomness for nonce: {}", e)))?;
+        .map_err(|e| io::Error::other(format!("Failed to acquire randomness for nonce: {e}")))?;
 
     // Derive key once (normal flow).
     let key = derive_key(password, &salt)?;
