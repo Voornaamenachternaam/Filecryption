@@ -10,6 +10,9 @@ use orion::hazardous::aead::xchacha20poly1305::{self, Nonce, SecretKey as OrionS
 use rpassword::prompt_password;
 use zeroize::Zeroizing;
 
+#[cfg(test)]
+mod main_test;
+
 /// The magic header identifying an encrypted file.
 const MAGIC: &[u8; 8] = b"FCRYPT01";
 /// Length of the random salt used in key derivation.
@@ -176,13 +179,11 @@ fn increment_nonce_checked(nonce: &mut [u8; NONCE_LEN]) -> Result<(), &'static s
 fn perform_dummy_open() {
     // This function should not panic; ignore any errors. Purpose: consume some AEAD-time.
     let zero_key = OrionSecretKey::from_slice(&[0u8; 32]);
-    if let Ok(k) = zero_key {
-        if let Ok(n) = Nonce::from_slice(&[0u8; NONCE_LEN]) {
-            // Small dummy ciphertext (must be at least TAG_LEN to be plausible)
-            let dummy_ct = vec![0u8; TAG_LEN + 1];
-            let mut _out = Vec::new();
-            let _ = xchacha20poly1305::open(&k, &n, &dummy_ct, None, &mut _out);
-        }
+    if let (Ok(k), Ok(n)) = (zero_key, Nonce::from_slice(&[0u8; NONCE_LEN])) {
+        // Small dummy ciphertext (must be at least TAG_LEN to be plausible)
+        let dummy_ct = vec![0u8; TAG_LEN + 1];
+        let mut _out = vec![0u8; 1];
+        let _ = xchacha20poly1305::open(&k, &n, &dummy_ct, None, &mut _out);
     }
 }
 
@@ -215,7 +216,9 @@ fn atomic_replace(temp: &Path, dest: &Path) -> io::Result<()> {
 
 /// Encrypts a single file using XChaCha20-Poly1305 and Argon2id.
 fn encrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
-    let out_path = path.with_extension("enc");
+    let mut os_string = path.as_os_str().to_os_string();
+    os_string.push(".enc");
+    let out_path = PathBuf::from(os_string);
     // Do not overwrite an existing encrypted file.
     if out_path.exists() {
         return Err(io::Error::new(
@@ -230,18 +233,9 @@ fn encrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
     let mut base_nonce = [0u8; NONCE_LEN];
 
     // Use getrandom for cryptographic randomness (OS RNG)
-    getrandom::getrandom(&mut salt).map_err(|e| {
-        io::Error::new(
-            ErrorKind::Other,
-            format!("Failed to acquire randomness for salt: {}", e),
-        )
-    })?;
-    getrandom::getrandom(&mut base_nonce).map_err(|e| {
-        io::Error::new(
-            ErrorKind::Other,
-            format!("Failed to acquire randomness for nonce: {}", e),
-        )
-    })?;
+    getrandom::fill(&mut salt).map_err(|e| io::Error::other(format!("Failed to acquire randomness for salt: {}", e)))?;
+    getrandom::fill(&mut base_nonce)
+        .map_err(|e| io::Error::other(format!("Failed to acquire randomness for nonce: {}", e)))?;
 
     // Derive key once (normal flow).
     let key = derive_key(password, &salt)?;
@@ -276,8 +270,8 @@ fn encrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
 
         let nonce = Nonce::from_slice(&cur_nonce).map_err(|_| io::Error::other("Invalid nonce state"))?;
 
-        // Create an empty buffer with pre-allocated capacity for the ciphertext + tag.
-        let mut ciphertext_chunk = Vec::with_capacity(n + TAG_LEN);
+        // Create a buffer for the ciphertext + tag.
+        let mut ciphertext_chunk = vec![0u8; n + TAG_LEN];
         xchacha20poly1305::seal(
             &key,
             &nonce,
@@ -299,6 +293,7 @@ fn encrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
     // Atomic replace (platform-specific inside)
     atomic_replace(&tmp_path, &out_path)?;
     tmp_file_handler.persist(); // Prevent cleanup on success.
+    fs::remove_file(path)?; // Delete original file on success
     Ok(())
 }
 
@@ -369,7 +364,7 @@ fn decrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
 
         let nonce = Nonce::from_slice(&cur_nonce).map_err(|_| io::Error::other("Invalid nonce state"))?;
 
-        let mut plaintext_chunk = Vec::with_capacity(PLAINTEXT_CHUNK_SIZE);
+        let mut plaintext_chunk = vec![0u8; PLAINTEXT_CHUNK_SIZE];
         xchacha20poly1305::open(&key, &nonce, &ciphertext_chunk, Some(&aad), &mut plaintext_chunk)
             .map_err(|_| {
                 io::Error::new(
@@ -397,7 +392,7 @@ fn decrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
 
         let nonce = Nonce::from_slice(&cur_nonce).map_err(|_| io::Error::other("Invalid nonce state"))?;
 
-        let mut final_plaintext_chunk = Vec::with_capacity(final_chunk_size - TAG_LEN);
+        let mut final_plaintext_chunk = vec![0u8; final_chunk_size - TAG_LEN];
         xchacha20poly1305::open(
             &key,
             &nonce,
@@ -420,6 +415,7 @@ fn decrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
 
     atomic_replace(&tmp_path, &out_path)?;
     tmp_file_handler.persist();
+    fs::remove_file(path)?;
     Ok(())
 }
 

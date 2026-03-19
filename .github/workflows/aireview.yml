@@ -16,12 +16,12 @@ jobs:
     steps:
       # checkout the PR HEAD (from the fork) if needed
       - name: Checkout PR head
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           repository: ${{ github.event.pull_request.head.repo.full_name }}
           ref: ${{ github.event.pull_request.head.ref }}
 
-      - uses: AidentErfurt/bc-ai-reviewer@main
+      - uses: AidentErfurt/bc-ai-reviewer@baaaaee45047a32f10d2a3fe544a3594b3853271 # main
         with:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           AI_PROVIDER: openrouter

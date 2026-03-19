@@ -1,19 +1,16 @@
 // main_test.rs
 
 use std::fs::{self, File};
-use std::io::{self, BufReader, BufWriter, ErrorKind, Read, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time;
 
-use argon2::{Algorithm, Argon2, Params, Version};
-use clap::{Parser, Subcommand};
-use orion::hazardous::aead::xchacha20poly1305::{self, Nonce, SecretKey as OrionSecretKey};
-use rand::RngCore;
-use rpassword::prompt_password;
+use argon2::Params;
+use rand::Rng;
 use zeroize::Zeroizing;
 
 // Import all functions and constants from the main module
-use filecryption::*;
+use crate::*;
 
 #[cfg(test)]
 mod tests {
@@ -92,16 +89,16 @@ mod tests {
 
         let k1 = derive_key(&pw, &salt).unwrap();
         let k2 = derive_key(&pw, &salt).unwrap();
-        assert_eq!(k1.as_ref(), k2.as_ref());
+        assert_eq!(k1.unprotected_as_bytes(), k2.unprotected_as_bytes());
 
         let mut other_salt = [0u8; SALT_LEN];
         rand::rng().fill_bytes(&mut other_salt);
         let k3 = derive_key(&pw, &other_salt).unwrap();
-        assert_ne!(k1.as_ref(), k3.as_ref());
+        assert_ne!(k1.unprotected_as_bytes(), k3.unprotected_as_bytes());
 
         let other_pw = Zeroizing::new("diff456".to_string());
         let k4 = derive_key(&other_pw, &salt).unwrap();
-        assert_ne!(k1.as_ref(), k4.as_ref());
+        assert_ne!(k1.unprotected_as_bytes(), k4.unprotected_as_bytes());
     }
 
     #[test]
@@ -282,16 +279,25 @@ mod tests {
         let td = create_temp_dir().unwrap();
         let sub = td.join("sub");
         fs::create_dir(&sub).unwrap();
-        let e1 = td.join("f1.txt.enc");
-        let e2 = sub.join("f2.txt.enc");
-        create_test_file(&e1, 100 + HEADER_SIZE as usize).unwrap();
-        create_test_file(&e2, 200 + HEADER_SIZE as usize).unwrap();
+        let f1 = td.join("f1.txt");
+        let f2 = sub.join("f2.txt");
+        create_test_file(&f1, 100).unwrap();
+        create_test_file(&f2, 200).unwrap();
 
         let pw = Zeroizing::new("secret".to_string());
+        // First encrypt them
+        walk_dir(&td, &pw, true).unwrap();
+
+        let e1 = td.join("f1.txt.enc");
+        let e2 = sub.join("f2.txt.enc");
+        assert!(e1.exists());
+        assert!(e2.exists());
+
+        // Then decrypt them
         walk_dir(&td, &pw, false).unwrap();
 
-        assert!(!e1.exists()); assert!(td.join("f1.txt").exists());
-        assert!(!e2.exists()); assert!(sub.join("f2.txt").exists());
+        assert!(!e1.exists()); assert!(f1.exists());
+        assert!(!e2.exists()); assert!(f2.exists());
 
         cleanup_temp_dir(&td).unwrap();
     }
@@ -338,16 +344,16 @@ mod tests {
     fn test_cli_parsing() {
         use clap::Parser;
 
-        let encrypt = Cli::try_parse_from(&["filecryption", "encrypt", "test.txt"]).unwrap();
-        matches!(encrypt.command, Command::Encrypt{file} if file == PathBuf::from("test.txt"));
+        let encrypt = Cli::try_parse_from(["filecryption", "encrypt", "test.txt"]).unwrap();
+        assert!(matches!(encrypt.command, Command::Encrypt{file} if file.to_str() == Some("test.txt")));
 
-        let decrypt = Cli::try_parse_from(&["filecryption", "decrypt", "test.txt.enc"]).unwrap();
-        matches!(decrypt.command, Command::Decrypt{file} if file == PathBuf::from("test.txt.enc"));
+        let decrypt = Cli::try_parse_from(["filecryption", "decrypt", "test.txt.enc"]).unwrap();
+        assert!(matches!(decrypt.command, Command::Decrypt{file} if file.to_str() == Some("test.txt.enc")));
 
-        let enc_dir = Cli::try_parse_from(&["filecryption", "encrypt-dir", "dir"]).unwrap();
-        matches!(enc_dir.command, Command::EncryptDir{dir} if dir == PathBuf::from("dir"));
+        let enc_dir = Cli::try_parse_from(["filecryption", "encrypt-dir", "dir"]).unwrap();
+        assert!(matches!(enc_dir.command, Command::EncryptDir{dir} if dir.to_str() == Some("dir")));
 
-        let dec_dir = Cli::try_parse_from(&["filecryption", "decrypt-dir", "dir"]).unwrap();
-        matches!(dec_dir.command, Command::DecryptDir{dir} if dir == PathBuf::from("dir"));
+        let dec_dir = Cli::try_parse_from(["filecryption", "decrypt-dir", "dir"]).unwrap();
+        assert!(matches!(dec_dir.command, Command::DecryptDir{dir} if dir.to_str() == Some("dir")));
     }
 }
