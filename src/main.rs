@@ -181,7 +181,7 @@ fn perform_dummy_open() {
         let dummy_ct = vec![0u8; TAG_LEN + 1];
         let mut _out = Vec::new();
         let _ = xchacha20poly1305::open(&k, &n, &dummy_ct, None, &mut _out);
-    }
+}
 }
 
 /// Cross-platform atomic replace helper.
