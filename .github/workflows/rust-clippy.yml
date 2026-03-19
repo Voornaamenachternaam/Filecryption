@@ -26,14 +26,14 @@ jobs:
       actions: read 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6.0.0
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
         with:
           fetch-depth: 0
           persist-credentials: false   # let the following action use the GITHUB_TOKEN you pass via env
 
       # Use dtolnay/rust-toolchain to set up the Rust toolchain
       - name: Setup Rust toolchain (dtolnay/rust-toolchain)
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
         with:
           toolchain: stable
           components: clippy
@@ -85,7 +85,7 @@ jobs:
 
       - name: Create or update Pull Request for clippy fixes (StepSecurity)
         if: steps.commit-fixes.outputs.created_branch != ''
-        uses: peter-evans/create-pull-request@v8
+        uses: peter-evans/create-pull-request@98357b18bf14b5342f975ff684046ec3b2a07725 # v8
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
@@ -103,7 +103,7 @@ jobs:
       # Use step-security/clippy-action for a check-run / annotations
       # -------------------------
       - name: Run Clippy (annotations via step-security/clippy-action)
-        uses: auguwu/clippy-action@master
+        uses: auguwu/clippy-action@9d027d6d9441955e85c6decd8c13d236f574da23 # master
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -117,7 +117,7 @@ jobs:
         continue-on-error: true
 
       - name: Upload analysis results to GitHub
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@b1bff81932f5cdfc8695c7752dcee935dcd061c8 # v4
         with:
           sarif_file: rust-clippy-results.sarif
           wait-for-processing: true

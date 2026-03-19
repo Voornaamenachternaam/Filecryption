@@ -20,11 +20,11 @@ jobs:
     steps:
       # 1️⃣ Checkout repository
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.1
 
       # 2️⃣ Install Rust toolchain and Clippy (replaces dtolnay/rust-toolchain)
       - name: Install Rust toolchain and Clippy
-        uses: actions-rust-lang/setup-rust-toolchain@v1.15.2
+        uses: actions-rust-lang/setup-rust-toolchain@1780873c7b576612439a134613cc4cc74ce5538c # v1.15.2
         with:
           toolchain: stable
           components: clippy
@@ -34,7 +34,7 @@ jobs:
       # 3️⃣ Run StepSecurity's Clippy action (annotates PRs / commits)
       #     (keeps the behaviour/annotation benefits of StepSecurity's action)
       - name: Run StepSecurity clippy-action (annotations)
-        uses: auguwu/clippy-action@master
+        uses: auguwu/clippy-action@9d027d6d9441955e85c6decd8c13d236f574da23 # master
         with:
           # token is used by many clippy actions for posting annotations/comments
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -93,7 +93,7 @@ jobs:
 
       # 7️⃣ Upload SARIF results to GitHub Code Scanning
       - name: Upload analysis results to GitHub
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@b1bff81932f5cdfc8695c7752dcee935dcd061c8 # v4
         with:
           sarif_file: rust-clippy-results.sarif
           wait-for-processing: true
@@ -136,7 +136,7 @@ jobs:
 
       - name: Create Pull Request
         if: steps.clippy_run.outputs.fixes_applied == 'true' && steps.commit_fixes.outputs.pr_branch != ''
-        uses: peter-evans/create-pull-request@v7
+        uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676 # v7.0.1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           title: "Apply Clippy auto-fixes"
