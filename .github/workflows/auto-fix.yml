@@ -27,7 +27,7 @@ jobs:
 
       - name: Cache cargo registry & target
         continue-on-error: true
-        uses: actions/cache@v5.0.4
+        uses: actions/cache@v5.0.5
         with:
           path: |
             ~/.cargo/registry
