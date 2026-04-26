@@ -156,7 +156,7 @@ jobs:
           }
 
       - name: Upload Rust binary to release
-        uses: taiki-e/upload-rust-binary-action@v1.29.1
+        uses: taiki-e/upload-rust-binary-action@v1.30.2
         with:
           bin: filecryption
           target: ${{ matrix.target }}
