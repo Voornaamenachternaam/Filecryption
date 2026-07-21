@@ -12,15 +12,15 @@ categories = ["cryptography"]
 publish = false
 
 [dependencies]
-orion = { version = "^0.17.14", features = ["default"] }
+orion = { version = "^0.17.15", features = ["default"] }
 argon2 = { version = "^0.5.3", default-features = false, features = ["std"] }
 base64 = "^0.22.1"
-rpassword = "^7.4.0"
-clap = { version = "^4.6.1", features = ["derive"] }
-zeroize = { version = "^1.8.2", features = ["zeroize_derive"] }
-rand = "^0.10.1"
+rpassword = "^7.5.4"
+clap = { version = "^4.6.3", features = ["derive"] }
+zeroize = { version = "^1.9.0", features = ["zeroize_derive"] }
+rand = "^0.10.2"
 windows-sys = { version = "^0.61.2", optional = true }
-getrandom = "^0.4.2"
+getrandom = "^0.4.3"
 
 [features]
 windows-replace = ["windows-sys"]
