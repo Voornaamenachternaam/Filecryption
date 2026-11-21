@@ -5,7 +5,9 @@ use std::process::exit;
 
 use argon2::{Algorithm, Argon2, Params, Version};
 use clap::{Parser, Subcommand};
-use orion::hazardous::aead::xchacha20poly1305::{Nonce, SecretKey as OrionSecretKey, XChaCha20Poly1305};
+use orion::hazardous::aead::xchacha20poly1305::{
+    Nonce, SecretKey as OrionSecretKey, XChaCha20Poly1305,
+};
 use rpassword::prompt_password;
 use zeroize::Zeroizing;
 
@@ -466,4 +468,4 @@ mod windows_replace {
             Ok(())
         }
     }
-} 
+}
