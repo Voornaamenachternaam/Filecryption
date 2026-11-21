@@ -2,6 +2,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufReader, BufWriter, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::exit;
+use std::convert::TryFrom;
 
 use argon2::{Algorithm, Argon2, Params, Version};
 use clap::{Parser, Subcommand};
@@ -153,8 +154,8 @@ fn increment_nonce_checked(nonce: &mut [u8; NONCE_LEN]) -> Result<(), &'static s
 }
 
 fn perform_dummy_open() {
-    let zero_key = OrionSecretKey::from_slice(&[0u8; 32]).unwrap();
-    let zero_nonce = Nonce::from_slice(&[0u8; NONCE_LEN]).unwrap();
+    let zero_key = OrionSecretKey::try_from([0u8; 32].as_slice()).unwrap();
+    let zero_nonce = Nonce::try_from([0u8; NONCE_LEN].as_slice()).unwrap();
     let dummy_ct = [0u8; TAG_LEN + 1];
     let mut dummy_out = [0u8; 1];
     let _ = XChaCha20Poly1305::open(&zero_key, &zero_nonce, &dummy_ct, None, &mut dummy_out);
@@ -245,7 +246,7 @@ fn encrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
         }
 
         let nonce =
-            Nonce::from_slice(&cur_nonce).map_err(|_| io::Error::other("Invalid nonce state"))?;
+            Nonce::try_from(cur_nonce.as_slice()).map_err(|_| io::Error::other("Invalid nonce state"))?;
 
         let ciphertext_len = n + TAG_LEN;
 
@@ -329,7 +330,7 @@ fn decrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
         reader.read_exact(&mut ciphertext_chunk[..])?;
 
         let nonce =
-            Nonce::from_slice(&cur_nonce).map_err(|_| io::Error::other("Invalid nonce state"))?;
+            Nonce::try_from(cur_nonce.as_slice()).map_err(|_| io::Error::other("Invalid nonce state"))?;
 
         XChaCha20Poly1305::open(
             &key,
@@ -362,7 +363,7 @@ fn decrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
         reader.read_exact(&mut final_ciphertext_chunk[..])?;
 
         let nonce =
-            Nonce::from_slice(&cur_nonce).map_err(|_| io::Error::other("Invalid nonce state"))?;
+            Nonce::try_from(cur_nonce.as_slice()).map_err(|_| io::Error::other("Invalid nonce state"))?;
 
         let mut final_plaintext_chunk = Zeroizing::new(vec![0u8; final_chunk_size - TAG_LEN]);
         XChaCha20Poly1305::open(
@@ -432,7 +433,7 @@ fn derive_key(password: &Zeroizing<String>, salt: &[u8; SALT_LEN]) -> io::Result
         .hash_password_into(password.as_bytes(), salt, raw_key.as_mut())
         .map_err(|e| io::Error::other(format!("Argon2 key derivation failed: {}", e)))?;
 
-    OrionSecretKey::from_slice(raw_key.as_ref())
+    OrionSecretKey::try_from(raw_key.as_ref())
         .map_err(|_| io::Error::other("Failed to initialize Orion secret key"))
 }
 
