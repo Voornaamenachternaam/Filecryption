@@ -3,21 +3,23 @@ name = "filecryption"
 version = "0.9.32"
 edition = "2024"
 rust-version = "1.100.0"
-description = "High-security file encryption using Argon2id and XChaCha20-Poly1305"
-repository = "https://github.com/Voornaamenachternaam/filecryption"
-homepage = "https://github.com/Voornaamenachternaam/filecryption"
-license-file = "LICENSE.txt"
 keywords = ["encryption", "decryption", "XChaCha20Poly1305"]
 categories = ["cryptography"]
 publish = false
 
 [dependencies]
-orion = { version = "^0.17.16", features = ["default"] }
-argon2 = { version = "^0.6.0", default-features = false, features = ["std"] }
+orion = { version = "^0.18.1", features = ["default"] }
+argon2 = "^0.6.0"
 rpassword = "^7.5.5"
 clap = { version = "^4.6.9", features = ["derive"] }
 zeroize = { version = "^1.9.2", features = ["zeroize_derive"] }
 getrandom = "^0.4.3"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "^0.61.2", features = ["Win32_Storage_FileSystem", "Win32_Foundation"], optional = true }
+
+[features]
+windows-replace = ["dep:windows-sys"]
 
 [profile.release]
 opt-level = 3
