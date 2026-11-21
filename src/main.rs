@@ -1,8 +1,8 @@
+use std::convert::TryFrom;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufReader, BufWriter, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::exit;
-use std::convert::TryFrom;
 
 use argon2::{Algorithm, Argon2, Params, Version};
 use clap::{Parser, Subcommand};
@@ -245,8 +245,8 @@ fn encrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
             break;
         }
 
-        let nonce =
-            Nonce::try_from(cur_nonce.as_slice()).map_err(|_| io::Error::other("Invalid nonce state"))?;
+        let nonce = Nonce::try_from(cur_nonce.as_slice())
+            .map_err(|_| io::Error::other("Invalid nonce state"))?;
 
         let ciphertext_len = n + TAG_LEN;
 
@@ -329,8 +329,8 @@ fn decrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
     for _ in 0..full_chunks {
         reader.read_exact(&mut ciphertext_chunk[..])?;
 
-        let nonce =
-            Nonce::try_from(cur_nonce.as_slice()).map_err(|_| io::Error::other("Invalid nonce state"))?;
+        let nonce = Nonce::try_from(cur_nonce.as_slice())
+            .map_err(|_| io::Error::other("Invalid nonce state"))?;
 
         XChaCha20Poly1305::open(
             &key,
@@ -362,8 +362,8 @@ fn decrypt_file(path: &Path, password: &Zeroizing<String>) -> io::Result<()> {
         let mut final_ciphertext_chunk = Zeroizing::new(vec![0u8; final_chunk_size]);
         reader.read_exact(&mut final_ciphertext_chunk[..])?;
 
-        let nonce =
-            Nonce::try_from(cur_nonce.as_slice()).map_err(|_| io::Error::other("Invalid nonce state"))?;
+        let nonce = Nonce::try_from(cur_nonce.as_slice())
+            .map_err(|_| io::Error::other("Invalid nonce state"))?;
 
         let mut final_plaintext_chunk = Zeroizing::new(vec![0u8; final_chunk_size - TAG_LEN]);
         XChaCha20Poly1305::open(
