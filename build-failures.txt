@@ -1,0 +1,22 @@
+FAILED: .
+    warning: `package.homepage` is redundant with `package.repository`
+     --> Cargo.toml:8:12
+      |
+    7 | repository = "https://github.com/Voornaamenachternaam/filecryption"
+      |              ------------------------------------------------------
+    8 | homepage = "https://github.com/Voornaamenachternaam/filecryption"
+      |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+      |
+      = note: `cargo::redundant_homepage` is set to `warn` by default
+    help: consider removing `package.homepage`
+    warning: `filecryption` (manifest) generated 1 warning
+        Updating crates.io index
+    error: failed to select a version for `argon2`.
+        ... required by package `filecryption v0.9.32 (/home/runner/work/Filecryption/Filecryption)`
+    versions that meet the requirements `^0.6.0` are: 0.6.0
+    
+    package `filecryption` depends on `argon2` with feature `std` but `argon2` does not have that feature.
+    help: there is a feature `kdf` with a similar name
+    
+    
+    failed to select a version for `argon2` which could resolve this conflict
