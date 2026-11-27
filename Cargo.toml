@@ -15,7 +15,7 @@ publish = false
 orion = { version = "^0.17.16", features = ["default"] }
 argon2 = { version = "^0.6.0", default-features = false, features = ["std"] }
 rpassword = "^7.5.5"
-clap = { version = "^4.6.9", features = ["derive"] }
+clap = { version = "^4.6.10", features = ["derive"] }
 zeroize = { version = "^1.9.2", features = ["zeroize_derive"] }
 getrandom = "^0.4.3"
 
